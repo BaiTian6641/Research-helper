@@ -1,0 +1,40 @@
+# Research Field Intelligence Tool — Configuration
+
+search:
+  max_results_per_source: 200
+  min_citations: 0
+  year_start: 2015
+  year_end: 2026
+  default_sources:
+    - arxiv
+    - semantic_scholar
+    - openalex
+    - pubmed
+    - crossref
+  timeout_seconds: 30
+  retry_max: 3
+
+dedup:
+  title_similarity_threshold: 0.92
+
+llm:
+  default_model: qwen3.5-reasoning
+  ollama_base_url: http://localhost:11434
+  max_concurrent_llm_calls: 4
+  abstract_sample_size: 500
+  timeout_seconds: 120
+  temperature_classification: 0.3
+  temperature_narrative: 0.7
+  auto_detect_hardware: true
+
+storage:
+  db_path: papers.db
+  library_db_path: local_library.db
+  cache_dir: .cache
+
+api:
+  host: 127.0.0.1
+  port: 8000
+
+ui:
+  port: 8501

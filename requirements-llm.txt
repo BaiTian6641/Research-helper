@@ -1,0 +1,2 @@
+# Optional: heavy LLM-related dependencies
+sentence-transformers>=2.6
