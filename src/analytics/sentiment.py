@@ -134,6 +134,31 @@ def analyze_sentiment_by_source_type(
     }
 
 
+def compute_sentiment_by_year(papers: list[Paper]) -> dict:
+    """Group papers by publication year and compute sentiment for each year.
+
+    Returns {year_str: {positive_count, negative_count, neutral_count,
+                        positive_ratio, negative_ratio, neutral_ratio}}.
+    """
+    from collections import defaultdict
+    by_year: dict[int, list] = defaultdict(list)
+    for p in papers:
+        if p.year:
+            by_year[p.year].append(p)
+    result: dict = {}
+    for year in sorted(by_year.keys()):
+        sent = analyze_sentiment_heuristic(by_year[year])
+        result[str(year)] = {
+            "positive_count": sent["positive_count"],
+            "negative_count": sent["negative_count"],
+            "neutral_count": sent["neutral_count"],
+            "positive_ratio": round(sent["positive_ratio"], 3),
+            "negative_ratio": round(sent["negative_ratio"], 3),
+            "neutral_ratio": round(sent["neutral_ratio"], 3),
+        }
+    return result
+
+
 def _compute_sentiment_score(positive: int, negative: int, neutral: int) -> float:
     """Compute a sentiment score from -100 (all negative) to +100 (all positive).
 

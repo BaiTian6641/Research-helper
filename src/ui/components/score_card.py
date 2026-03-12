@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.reports.charts import sentiment_donut_chart
+
 
 def render_score_cards(stats: dict) -> None:
     """Render the comprehensive score prominently, then dimension scores."""
@@ -49,16 +51,34 @@ def render_score_cards(stats: dict) -> None:
 
 
 def render_sentiment_details(stats: dict) -> None:
-    """Render positive / negative sentiment breakdown."""
-    pos_ratio = stats.get("sentiment_positive_ratio", 0)
-    neg_ratio = stats.get("sentiment_negative_ratio", 0)
-    neutral_ratio = max(0, 1.0 - pos_ratio - neg_ratio)
+    """Render positive / negative / neutral sentiment breakdown with donut chart."""
+    pos_ratio  = stats.get("sentiment_positive_ratio", 0)
+    neg_ratio  = stats.get("sentiment_negative_ratio", 0)
+    neu_ratio  = stats.get("sentiment_neutral_ratio",
+                           max(0.0, 1.0 - pos_ratio - neg_ratio))
+
+    # Overall counts (derive from ratios if raw counts unavailable)
+    total_sents = stats.get("total_papers", 100)
+    pos_count = int(pos_ratio * total_sents)
+    neg_count = int(neg_ratio * total_sents)
+    neu_count = max(0, total_sents - pos_count - neg_count)
 
     st.subheader("💬 Sentiment Breakdown")
+
+    # Metrics row
     c1, c2, c3 = st.columns(3)
     c1.metric("👍 Positive", f"{pos_ratio:.0%}")
-    c2.metric("😐 Neutral", f"{neutral_ratio:.0%}")
+    c2.metric("😐 Neutral",  f"{neu_ratio:.0%}")
     c3.metric("👎 Negative", f"{neg_ratio:.0%}")
+
+    # Donut chart
+    fig = sentiment_donut_chart(pos_count, neg_count, neu_count,
+                                title="Sentiment Distribution (all sources)")
+    if fig.data:
+        from src.ui.components.trend_chart import export_chart_buttons
+        st.plotly_chart(fig, use_container_width=True)
+        with st.expander("Export this chart", expanded=False):
+            export_chart_buttons(fig, "sentiment_distribution")
 
     # Sample sentences
     pos_samples = stats.get("sentiment_positive_samples", [])
@@ -66,12 +86,18 @@ def render_sentiment_details(stats: dict) -> None:
 
     if pos_samples:
         with st.expander("🟢 Positive sentiment samples", expanded=False):
-            for s in pos_samples[:5]:
-                st.markdown(f"- {s}")
+            for s in pos_samples[:8]:
+                if isinstance(s, dict):
+                    st.markdown(f"- *{s.get('sentence', '')}*  \n  **{s.get('title', '')}**")
+                else:
+                    st.markdown(f"- {s}")
     if neg_samples:
         with st.expander("🔴 Negative sentiment samples", expanded=False):
-            for s in neg_samples[:5]:
-                st.markdown(f"- {s}")
+            for s in neg_samples[:8]:
+                if isinstance(s, dict):
+                    st.markdown(f"- *{s.get('sentence', '')}*  \n  **{s.get('title', '')}**")
+                else:
+                    st.markdown(f"- {s}")
 
 
 def _score_colour(value: float) -> str:

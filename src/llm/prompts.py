@@ -96,6 +96,44 @@ Return a JSON object:
 Return JSON only:"""
 
 # ---------------------------------------------------------------------------
+# Paper-level sentiment classification
+# ---------------------------------------------------------------------------
+LLM_SENTIMENT_ANALYSIS_PROMPT = """You are a research paper analyst. Classify the overall sentiment of each abstract below toward its research area's prospects and results.
+
+Classify as:
+- "positive": results are promising, significant advances, strong performance, optimistic outlook
+- "negative": limitations dominate, failures, risks, disappointing results, unsolved blocking issues
+- "neutral": objective/methodological focus, mixed results, incremental work, no strong evaluative claim
+
+Return a JSON object:
+{{"classifications": [{{"paper_index": <int>, "label": "<positive|negative|neutral>", "reason": "<one sentence>"}}]}}
+
+Abstracts:
+{abstracts_text}
+
+Return JSON only:"""
+
+
+# ---------------------------------------------------------------------------
+# Paper-level sentiment classification
+# ---------------------------------------------------------------------------
+LLM_SENTIMENT_ANALYSIS_PROMPT = """You are a research paper analyst. Classify the overall sentiment of each abstract below toward its research area's prospects and results.
+
+Classify as:
+- "positive": results are promising, significant advances, strong performance, optimistic outlook
+- "negative": limitations dominate, failures, risks, disappointing results, unsolved blocking issues
+- "neutral": objective/methodological focus, mixed results, incremental work, no strong evaluative claim
+
+Return a JSON object:
+{{"classifications": [{{"paper_index": <int>, "label": "<positive|negative|neutral>", "reason": "<one sentence>"}}]}}
+
+Abstracts:
+{abstracts_text}
+
+Return JSON only:"""
+
+
+# ---------------------------------------------------------------------------
 # Proposal claim extraction
 # ---------------------------------------------------------------------------
 PROPOSAL_CLAIM_EXTRACTION_PROMPT = """You are a research proposal reviewer. Extract the main claims, objectives, and proposed methods from the following proposal text.

@@ -18,9 +18,9 @@ dedup:
   title_similarity_threshold: 0.92
 
 llm:
-  default_model: qwen3.5-reasoning
-  ollama_base_url: http://localhost:11434
-  max_concurrent_llm_calls: 4
+  default_model: qwen35-reasoning
+  ollama_base_url: http://localhost:8080
+  max_concurrent_llm_calls: 1
   abstract_sample_size: 500
   timeout_seconds: 120
   temperature_classification: 0.3

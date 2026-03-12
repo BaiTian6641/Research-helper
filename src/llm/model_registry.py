@@ -18,8 +18,8 @@ class ModelInfo:
 # Ordered by preference (first = recommended)
 MODELS: list[ModelInfo] = [
     ModelInfo(
-        name="qwen3.5-reasoning",
-        display_name="Qwen3.5-27B-Claude-Opus-Reasoning-Distilled (★ Recommended)",
+        name="qwen35-reasoning",
+        display_name="Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled (recommended)",
         size_gb=17.0,
         vram_gb=20,
         best_for="Deep reasoning, gap analysis, narrative summary",
