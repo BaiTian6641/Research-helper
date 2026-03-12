@@ -23,6 +23,70 @@ from src.reports.charts import (
 )
 
 
+def _render_security_alerts(alerts: list[dict]) -> None:
+    """Render a colour-coded prompt-injection alert table.
+
+    Confidence levels:
+    * **Confirmed** (Tier 1) — red row  : unambiguously adversarial pattern
+    * **High**      (Tier 2) — orange row: very suspicious, near-certain attack
+    * **Medium**    (Tier 3) — amber row : heuristic / encoding anomaly
+    * **Low**                — grey row  : operational (control chars, etc.)
+    """
+    if not alerts:
+        return
+
+    import pandas as pd
+
+    _COLOURS = {
+        "Confirmed": ("#c0392b", "white"),
+        "High":      ("#d35400", "white"),
+        "Medium":    ("#d4a017", "black"),
+        "Low":       ("#7f8c8d", "white"),
+    }
+
+    confirmed = sum(1 for a in alerts if a.get("confidence") == "Confirmed")
+    high      = sum(1 for a in alerts if a.get("confidence") == "High")
+
+    if confirmed > 0:
+        st.error(
+            f"⛔ **{confirmed} confirmed** prompt-injection pattern(s) detected and redacted. "
+            "Analysis continued on sanitised text — results may be incomplete."
+        )
+    elif high > 0:
+        st.warning(
+            f"⚠️ **{high} high-confidence** suspicious pattern(s) detected and redacted."
+        )
+    else:
+        st.info("🛡️ Suspicious input patterns detected (low/medium confidence). Details below.")
+
+    with st.expander(
+        f"🛡️ Suspicious Input Table ({len(alerts)} alert{'s' if len(alerts) != 1 else ''})",
+        expanded=confirmed > 0,
+    ):
+        rows = [
+            {
+                "Confidence":     a.get("confidence", "?"),
+                "Context":        a.get("context", "?").title(),
+                "Detection Type": a.get("detection_type", a.get("pattern", "?")),
+                "Tier":           a.get("tier", "?"),
+                "Matched Text":   a.get("snippet", "")[:100],
+            }
+            for a in alerts
+        ]
+        df = pd.DataFrame(rows)
+
+        def _style_row(row: pd.Series) -> list[str]:
+            bg, fg = _COLOURS.get(str(row["Confidence"]), ("#ecf0f1", "black"))
+            return [f"background-color:{bg};color:{fg}"] * len(row)
+
+        styled = df.style.apply(_style_row, axis=1)
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.caption(
+            "⚠️ All flagged patterns were **redacted** before reaching the LLM. "
+            "The analysis above is based on the sanitised text."
+        )
+
+
 def _render_export_buttons(stats: dict, papers: list[dict]) -> None:
     """Render CSV / JSON / HTML download buttons for analysis results."""
     import csv
@@ -170,6 +234,22 @@ def render(client: APIClient) -> None:
     _papers_for_export = (st.session_state.get("last_search") or {}).get("papers", [])
     with st.expander("📥 Export Results", expanded=False):
         _render_export_buttons(stats, _papers_for_export)
+
+    # ── Cache-restored notice ──
+    if st.session_state.get("_cache_restored_at") and not st.session_state.get("dashboard_stats"):
+        _ts = st.session_state["_cache_restored_at"]
+        try:
+            from datetime import datetime as _dt
+            _ts_str = _dt.fromisoformat(_ts).strftime("%b %d, %Y at %H:%M")
+        except Exception:
+            _ts_str = str(_ts)[:16]
+        st.info(
+            f"⚡ Dashboard data restored from local cache — last run **{_ts_str}**. "
+            "Click Re-analyse to refresh."
+        )
+
+    # ── Security alerts ──
+    _render_security_alerts((stats or {}).get("security_alerts", []))
 
     # Score cards
     render_score_cards(stats)

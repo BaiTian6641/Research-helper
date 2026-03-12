@@ -1,4 +1,4 @@
-"""Prompt injection safety filter for externally-sourced text.
+﻿"""Prompt injection safety filter for externally-sourced text.
 
 Detects and neutralises prompt injection attempts that may be embedded in
 paper abstracts, titles, or user-submitted proposal text before they reach
@@ -6,19 +6,19 @@ the LLM.
 
 Threat model
 ------------
-* **Paper abstracts / titles** (arXiv, PubMed, Semantic Scholar, …) — text is
+* **Paper abstracts / titles** (arXiv, PubMed, Semantic Scholar, 鈥? 鈥?text is
   fetched from third-party APIs and written by authors we do not control.
   Probability of intentional attack is low, but automated pipelines are an
   attractive target for poisoning attacks that try to skew analysis output.
 
-* **User-submitted proposal text** — direct user input that may contain text
+* **User-submitted proposal text** 鈥?direct user input that may contain text
   pasted from untrusted sources (e.g. a proposal sent for review that has been
   tampered with).
 
 Attack vectors addressed
 ------------------------
-1. Special model tokens / delimiter injection (``</s>``, ``<|im_end|>``, …)
-2. Role override / persona injection ("ignore previous instructions", …)
+1. Special model tokens / delimiter injection (``</s>``, ``<|im_end|>``, 鈥?
+2. Role override / persona injection ("ignore previous instructions", 鈥?
 3. Conversation-marker injection ("Human:", "Assistant:" mid-text)
 4. Output format manipulation ("return plain text instead of JSON")
 5. System-prompt exfiltration attempts
@@ -28,14 +28,17 @@ Attack vectors addressed
 
 Design principles
 -----------------
-* **Never raises** — always returns sanitised text so the pipeline continues
+* **Never raises** 鈥?always returns sanitised text so the pipeline continues
   with degraded but safe data rather than crashing.
 * **Logs every detection** at WARNING level with the pattern category so
   operators can audit without exposing raw injected content.
-* **Tiered strictness** — abstracts use medium strictness (avoids scientific
+* **Tiered strictness** 鈥?abstracts use medium strictness (avoids scientific
   false-positives); proposal text uses high strictness.
-* **Redact, not drop** — matched spans are replaced with ``[REDACTED]`` so
+* **Redact, not drop** 鈥?matched spans are replaced with ``[REDACTED]`` so
   the surrounding context is preserved for analysis.
+* **Event log** 鈥?every detection is appended to a per-request
+  ``_SecurityEventLog`` so the API can surface them in the response and the
+  UI can display a colour-coded alert table.
 """
 
 from __future__ import annotations
@@ -49,7 +52,73 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tier 1 — Very high confidence: almost never appear in legitimate academic text
+# Confidence mapping 鈥?pattern name 鈫?confidence label
+# ---------------------------------------------------------------------------
+_PATTERN_CONFIDENCE: dict[str, str] = {
+    # Tier 1 鈥?unambiguously adversarial
+    "special_token_injection": "Confirmed",
+    "instruction_override": "Confirmed",
+    "role_marker_injection": "Confirmed",
+    "exfiltration_attempt": "Confirmed",
+    "jailbreak_trigger": "Confirmed",
+    "bidi_override": "Confirmed",
+    # Tier 2 鈥?very suspicious
+    "persona_injection": "High",
+    "output_format_subversion": "High",
+    "invisible_unicode": "High",
+    # Tier 3 / operational
+    "template_injection": "Medium",
+    "control_chars": "Low",
+}
+
+# ---------------------------------------------------------------------------
+# Per-request security event log
+# ---------------------------------------------------------------------------
+
+class _SecurityEventLog:
+    """Collects sanitisation events for a single request lifecycle.
+
+    Reset at the start of each API request; collected at the end so the
+    results can be attached to the response payload.
+    """
+
+    def __init__(self) -> None:
+        self._events: list[dict] = []
+
+    def reset(self) -> None:
+        self._events.clear()
+
+    def log(self, context: str, pattern: str, snippet: str, tier: int) -> None:
+        confidence = _PATTERN_CONFIDENCE.get(pattern, "Medium")
+        self._events.append({
+            "context": context,
+            "pattern": pattern,
+            "detection_type": pattern.replace("_", " ").title(),
+            "snippet": snippet[:120],
+            "confidence": confidence,
+            "tier": tier,
+        })
+
+    def collect(self) -> list[dict]:
+        return list(self._events)
+
+
+# Module-level singleton 鈥?one log per process (single-user localhost tool)
+_event_log = _SecurityEventLog()
+
+
+def reset_security_log() -> None:
+    """Call at the start of each API request to clear previous events."""
+    _event_log.reset()
+
+
+def collect_security_events() -> list[dict]:
+    """Return all events recorded since the last reset."""
+    return _event_log.collect()
+
+
+# ---------------------------------------------------------------------------
+# Tier 1 鈥?Very high confidence: almost never appear in legitimate academic text
 # ---------------------------------------------------------------------------
 
 # Special model tokens / EOS / BOS delimiters.
@@ -72,7 +141,7 @@ _T1_SPECIAL_TOKENS = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
-# Direct instruction override — explicit imperative targeting LLM behaviour.
+# Direct instruction override 鈥?explicit imperative targeting LLM behaviour.
 # Phrases like these have essentially zero legitimate use in a research paper.
 _T1_INSTRUCTION_OVERRIDE = re.compile(
     r"""
@@ -107,7 +176,7 @@ _T1_INSTRUCTION_OVERRIDE = re.compile(
 
 # Conversation-role markers injected mid-text to simulate a new turn.
 # Matches "Human:", "Assistant:", "System:", "AI:", "User:" at start of a line
-# or following ≥2 whitespace/newline chars — characteristic of multi-turn poisoning.
+# or following 鈮? whitespace/newline chars 鈥?characteristic of multi-turn poisoning.
 _T1_ROLE_MARKERS = re.compile(
     r"""
     (?:^|(?<=\n\n)|(?<=\r\n\r\n))   # start-of-string or after blank line
@@ -159,12 +228,10 @@ _T1_JAILBREAK = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Tier 2 — Medium confidence: suspicious in research text, rare false-positives
+# Tier 2 鈥?Medium confidence: suspicious in research text, rare false-positives
 # ---------------------------------------------------------------------------
 
 # Persona / roleplay injection.
-# "act as" is deliberately excluded here — it appears in chemistry ("acts as a catalyst").
-# We target unambiguous persona framing: "pretend you are", "roleplay as".
 # Allow 0-3 adjective words between the article and the role noun to catch
 # "pretend you are an uncensored AI", "pretend you are a free and helpful bot", etc.
 _T2_PERSONA_INJECTION = re.compile(
@@ -188,7 +255,7 @@ _T2_PERSONA_INJECTION = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
-# Output format subversion — trying to make the model return something other than JSON.
+# Output format subversion 鈥?trying to make the model return something other than JSON.
 _T2_OUTPUT_SUBVERSION = re.compile(
     r"""
     \b
@@ -206,7 +273,7 @@ _T2_OUTPUT_SUBVERSION = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Tier 3 — Heuristic / strict-mode only (higher false-positive risk)
+# Tier 3 鈥?Heuristic / strict-mode only (higher false-positive risk)
 # ---------------------------------------------------------------------------
 
 # f-string template injection: bare {variable_name} patterns that could be
@@ -243,7 +310,7 @@ _INVISIBLE_UNICODE = re.compile(
     re.UNICODE,
 )
 
-# Right-to-left override (RTLO, U+202E) and Arabic letter mark — can reverse
+# Right-to-left override (RTLO, U+202E) and Arabic letter mark 鈥?can reverse
 # displayed text direction to disguise injections.
 _BIDI_OVERRIDE = re.compile(r"[\u202e\u061c\u200f\u200e]")
 
@@ -272,8 +339,8 @@ _REDACTION_MARKER = "[REDACTED]"
 
 # Maximum safe lengths per context (characters, post-sanitisation)
 _MAX_LEN: dict[str, int] = {
-    "abstract": 1800,   # ~300 words — generous for a real abstract
-    "title":    300,    # ~50 words — generous for a real title
+    "abstract": 1800,   # ~300 words 鈥?generous for a real abstract
+    "title":    300,    # ~50 words 鈥?generous for a real title
     "proposal": 8000,   # user text; safety threshold
     "query":    300,    # search queries are always short
     "generic":  2000,
@@ -355,29 +422,30 @@ class PromptSafetyFilter:
         original = text
         detections: list[str] = []
 
-        # Step 1 — Unicode normalisation and invisible char removal
+        # Step 1 鈥?Unicode normalisation and invisible char removal
         text = self._clean_unicode(text, context, detections)
 
-        # Step 2 — Remove ASCII control characters (keep \t \n \r)
+        # Step 2 鈥?Remove ASCII control characters (keep \t \n \r)
         cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
         if cleaned != text:
             detections.append("control_chars")
+            _event_log.log(context, "control_chars", "ASCII control characters", 3)
         text = cleaned
 
-        # Step 3 — Tier 1 patterns (always applied)
-        text = self._apply_patterns(_TIER1_PATTERNS, text, context, detections, redact=True)
+        # Step 3 鈥?Tier 1 patterns (always applied)
+        text = self._apply_patterns(_TIER1_PATTERNS, text, context, detections, redact=True, tier=1)
 
-        # Step 4 — Tier 2 patterns (always applied)
-        text = self._apply_patterns(_TIER2_PATTERNS, text, context, detections, redact=True)
+        # Step 4 鈥?Tier 2 patterns (always applied)
+        text = self._apply_patterns(_TIER2_PATTERNS, text, context, detections, redact=True, tier=2)
 
-        # Step 5 — Tier 3 heuristic patterns (strict / proposal mode only)
+        # Step 5 鈥?Tier 3 heuristic patterns (strict / proposal mode only)
         if extra_strict or self.strict:
-            text = self._apply_patterns(_TIER3_PATTERNS, text, context, detections, redact=True)
+            text = self._apply_patterns(_TIER3_PATTERNS, text, context, detections, redact=True, tier=3)
 
-        # Step 6 — Length truncation
+        # Step 6 鈥?Length truncation
         max_len = _MAX_LEN.get(context, _MAX_LEN["generic"])
         if len(text) > max_len:
-            text = text[:max_len].rstrip() + "…"
+            text = text[:max_len].rstrip() + "\u2026"
             detections.append("truncated")
 
         was_modified = text != original
@@ -394,15 +462,17 @@ class PromptSafetyFilter:
 
         if _BIDI_OVERRIDE.search(text):
             logger.warning(
-                "Bidi-override character detected in %s — likely visual spoofing attempt",
+                "Bidi-override character detected in %s 鈥?likely visual spoofing attempt",
                 context,
             )
             detections.append("bidi_override")
+            _event_log.log(context, "bidi_override", "bidi-override / RTL-override character", 1)
             text = _BIDI_OVERRIDE.sub("", text)
 
         cleaned = _INVISIBLE_UNICODE.sub("", text)
         if cleaned != text:
             detections.append("invisible_unicode")
+            _event_log.log(context, "invisible_unicode", "invisible / zero-width Unicode character", 2)
         return cleaned
 
     @staticmethod
@@ -412,22 +482,24 @@ class PromptSafetyFilter:
         context: str,
         detections: list[str],
         redact: bool,
+        tier: int = 1,
     ) -> str:
         for name, pattern in patterns:
-            def _replace(m: re.Match, _n: str = name) -> str:
-                snippet = m.group(0)[:80].replace("\n", " ")
+            def _replace(m: re.Match, _n: str = name, _t: int = tier, _c: str = context) -> str:
+                snippet = m.group(0)[:120].replace("\n", " ")
                 logger.warning(
                     "Prompt injection [%s] detected in %s: '%.80s'",
-                    _n, context, snippet,
+                    _n, _c, snippet,
                 )
                 detections.append(_n)
+                _event_log.log(_c, _n, snippet, _t)
                 return _REDACTION_MARKER if redact else ""
             text = pattern.sub(_replace, text)
         return text
 
 
 # ---------------------------------------------------------------------------
-# Module-level default instance — import and call directly
+# Module-level default instance 鈥?import and call directly
 # ---------------------------------------------------------------------------
 
 _default_filter = PromptSafetyFilter(strict=False)
@@ -450,4 +522,3 @@ def sanitise_proposal(text: str) -> str:
 
 def sanitise_query(text: str) -> str:
     """Return a sanitised copy of a search query string."""
-    return _default_filter.sanitise_query(text).text

@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from src.api import schemas
 import src.api.main as _main
+from src.llm.safety import reset_security_log, collect_security_events
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ async def _run_analyze_impl(
     pipeline = _main.pipeline
     if store is None or pipeline is None:
         raise HTTPException(503, "Service not ready")
+
+    reset_security_log()
 
     if progress_callback:
         progress_callback("Loading papers from database...", 0)
@@ -52,6 +55,7 @@ async def _run_analyze_impl(
         str(k): v for k, v in stats_dict["papers_per_year"].items()
     }
     stats_dict["year_range"] = list(stats_dict["year_range"])
+    stats_dict["security_alerts"] = collect_security_events()
     return schemas.FieldStatsResponse(**stats_dict)
 
 

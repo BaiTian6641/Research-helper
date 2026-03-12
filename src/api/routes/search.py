@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from src.api import schemas
 import src.api.main as _main
 from src.config.settings import get_settings
+from src.llm.safety import reset_security_log, collect_security_events
 from src.searcher.orchestrator import SearchOrchestrator
 from src.storage.models import FieldStats
 
@@ -41,6 +42,9 @@ async def _run_search_impl(
         raise HTTPException(503, "Service not ready")
 
     settings = get_settings()
+
+    # Reset injection detector for this request
+    reset_security_log()
 
     _emit_progress(progress_callback, "Starting academic search...")
     orchestrator = SearchOrchestrator(
@@ -123,6 +127,7 @@ async def _run_search_impl(
         str(k): v for k, v in stats_dict["papers_per_year"].items()
     }
     stats_dict["year_range"] = list(stats_dict["year_range"])
+    stats_dict["security_alerts"] = collect_security_events()
 
     _emit_progress(progress_callback, "Completed.", len(all_items))
     return schemas.SearchResponse(

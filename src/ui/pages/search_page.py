@@ -25,6 +25,7 @@ from src.reports.charts import (
     sentiment_by_source_chart,
     sentiment_by_year_chart,
 )
+from src.storage.cache import UIResultCache
 
 ALL_SOURCES = [
     "arxiv",
@@ -42,8 +43,72 @@ ALL_WEB_SOURCES = [
 ]
 
 
+def _render_security_alerts(alerts: list[dict]) -> None:
+    """Render a colour-coded prompt-injection alert table.
+
+    Confidence levels:
+    * **Confirmed** (Tier 1) — red row  : unambiguously adversarial pattern
+    * **High**      (Tier 2) — orange row: very suspicious, near-certain attack
+    * **Medium**    (Tier 3) — yellow row: heuristic / encoding anomaly
+    * **Low**                — grey row  : operational (control chars, etc.)
+    """
+    if not alerts:
+        return
+
+    import pandas as pd
+
+    _COLOURS = {
+        "Confirmed": ("#c0392b", "white"),   # red
+        "High":      ("#d35400", "white"),   # orange
+        "Medium":    ("#d4a017", "black"),   # amber
+        "Low":       ("#7f8c8d", "white"),   # grey
+    }
+
+    confirmed = sum(1 for a in alerts if a.get("confidence") == "Confirmed")
+    high      = sum(1 for a in alerts if a.get("confidence") == "High")
+
+    # Header banner
+    if confirmed > 0:
+        st.error(
+            f"⛔ **{confirmed} confirmed** prompt-injection pattern(s) detected and redacted. "
+            "Analysis continued on sanitised text — results may be incomplete."
+        )
+    elif high > 0:
+        st.warning(
+            f"⚠️ **{high} high-confidence** suspicious pattern(s) detected and redacted."
+        )
+    else:
+        st.info("🛡️ Suspicious input patterns detected (low/medium confidence). Details below.")
+
+    with st.expander(
+        f"🛡️ Suspicious Input Table ({len(alerts)} alert{'s' if len(alerts) != 1 else ''})",
+        expanded=confirmed > 0,
+    ):
+        rows = [
+            {
+                "Confidence":     a.get("confidence", "?"),
+                "Context":        a.get("context", "?").title(),
+                "Detection Type": a.get("detection_type", a.get("pattern", "?")),
+                "Tier":           a.get("tier", "?"),
+                "Matched Text":   a.get("snippet", "")[:100],
+            }
+            for a in alerts
+        ]
+        df = pd.DataFrame(rows)
+
+        def _style_row(row: pd.Series) -> list[str]:
+            bg, fg = _COLOURS.get(str(row["Confidence"]), ("#ecf0f1", "black"))
+            return [f"background-color:{bg};color:{fg}"] * len(row)
+
+        styled = df.style.apply(_style_row, axis=1)
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.caption(
+            "⚠️ All flagged patterns were **redacted** before reaching the LLM. "
+            "The analysis above is based on the sanitised text."
+        )
+
+
 def _render_export_buttons(stats: dict, papers: list[dict]) -> None:
-    """Render CSV / JSON / HTML download buttons from search/analysis results."""
     import csv
     import io
     import json as _json
@@ -198,6 +263,9 @@ def render(client: APIClient) -> None:
                 raise RuntimeError("No result returned from streaming search")
 
             st.session_state["last_search"] = result
+            # Persist result to disk — survives browser refresh / computer sleep
+            UIResultCache.save(result, normalized_query)
+            st.session_state.pop("_cache_restored_at", None)  # it's fresh now
             # Pre-fill dashboard query from search so switching pages works
             st.session_state["dashboard_query"] = normalized_query
             progress_box.empty()
@@ -228,6 +296,22 @@ def render(client: APIClient) -> None:
     # ── Export ──
     with st.expander("📥 Export Results", expanded=False):
         _render_export_buttons(stats, papers_list)
+
+    # ── Cache-restored notice ──
+    if st.session_state.get("_cache_restored_at"):
+        _ts = st.session_state["_cache_restored_at"]
+        try:
+            from datetime import datetime as _dt
+            _ts_str = _dt.fromisoformat(_ts).strftime("%b %d, %Y at %H:%M")
+        except Exception:
+            _ts_str = str(_ts)[:16]
+        st.info(
+            f"⚡ Results restored from local cache — last run **{_ts_str}**. "
+            "Submit a new search above to refresh."
+        )
+
+    # ── Security alerts ──
+    _render_security_alerts(stats.get("security_alerts", []))
 
     # Scores
     render_score_cards(stats)

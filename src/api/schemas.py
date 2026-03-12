@@ -142,6 +142,8 @@ class FieldStatsResponse(BaseModel):
     gaps_and_opportunities: list[str] | None = None
     field_specific_risks: list[str] | None = None
     recommended_focus_areas: list[str] | None = None
+    # Prompt-injection detections collected during this analysis run
+    security_alerts: list[dict] = []
 
 
 class SearchResponse(BaseModel):
