@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("LLM available: %s @ %s", llm_client.model, llm_client.base_url)
         else:
-            logger.info("Ollama not running — using heuristic fallback")
+            logger.info("LLM server not running — using heuristic fallback")
             llm_client = None
 
     # Initialise pipeline

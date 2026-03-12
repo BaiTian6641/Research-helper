@@ -40,8 +40,8 @@ class DedupSettings(BaseSettings):
 
 
 class LLMSettings(BaseSettings):
-    default_model: str = "qwen3.5-reasoning"
-    ollama_base_url: str = "http://localhost:11434"
+    default_model: str = "qwen35-reasoning"
+    ollama_base_url: str = "http://localhost:8080"  # llama-server default; Ollama uses 11434
     max_concurrent_llm_calls: int = 4
     abstract_sample_size: int = 500
     timeout_seconds: int = 120

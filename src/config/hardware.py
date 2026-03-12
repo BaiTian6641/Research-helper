@@ -20,7 +20,7 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 # Thresholds (in GB)
-MIN_VRAM_GB = 12.0
+MIN_VRAM_GB = 8.0   # Intel Arc Pro B50 has 8 GB VRAM
 MIN_RAM_GB = 32.0
 
 
@@ -193,6 +193,10 @@ def _detect_gpus() -> list[dict]:
     if not gpus:
         gpus.extend(_amd_rocm_gpus())
 
+    # 3. Try Intel Arc / XPU (torch.xpu)
+    if not gpus:
+        gpus.extend(_intel_xpu_gpus())
+
     return gpus
 
 
@@ -230,6 +234,25 @@ def _nvidia_smi_gpus() -> list[dict]:
         return gpus
     except Exception as e:
         logger.debug("nvidia-smi failed: %s", e)
+        return []
+
+
+def _intel_xpu_gpus() -> list[dict]:
+    """Detect Intel Arc / XPU devices via torch.xpu (ipex-llm / PyTorch XPU build)."""
+    try:
+        import torch
+        if not torch.xpu.is_available():
+            return []
+        gpus: list[dict] = []
+        for i in range(torch.xpu.device_count()):
+            name = torch.xpu.get_device_name(i)
+            props = torch.xpu.get_device_properties(i)
+            vram_gb = props.total_memory / (1024 ** 3)
+            gpus.append({"name": name, "vram_gb": round(vram_gb, 1)})
+        logger.debug("Intel XPU gpus: %s", gpus)
+        return gpus
+    except Exception as e:
+        logger.debug("Intel XPU detection failed: %s", e)
         return []
 
 

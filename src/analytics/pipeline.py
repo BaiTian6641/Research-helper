@@ -20,6 +20,7 @@ from src.analytics.nlp_fast import compute_nlp_stats
 from src.analytics.sentiment import (
     analyze_sentiment_heuristic,
     analyze_sentiment_by_source_type,
+    compute_sentiment_by_year,
 )
 from src.analytics.scores import (
     compute_comprehensive_score,
@@ -113,12 +114,22 @@ class AnalyticsPipeline:
         sentiment_by_type = analyze_sentiment_by_source_type(papers)
         news_sentiment = sentiment_by_type["news"]
         combined_sentiment = sentiment_by_type["combined"]
+        sentiment_by_year = compute_sentiment_by_year(papers)
 
         # ── Part C: LLM or heuristic for motivation, confidence, market ──
         if self._llm_available and self.llm_client:
             motivation, confidence, market, themes, narrative = await self._run_llm(
                 analysis_papers, query, year_start, year_end, trend, venue
             )
+            # Supplement: LLM-classified paper sentiment gives richer sample sentences
+            from src.llm.tasks.sentiment_analyzer import analyze_sentiment_llm
+            llm_sent = await analyze_sentiment_llm(analysis_papers, self.llm_client)
+            if llm_sent["positive_samples"] or llm_sent["negative_samples"]:
+                combined_sentiment = {
+                    **combined_sentiment,
+                    "positive_samples": llm_sent["positive_samples"],
+                    "negative_samples": llm_sent["negative_samples"],
+                }
         else:
             motivation, confidence, market, themes, narrative = self._run_heuristic(
                 analysis_papers
@@ -209,6 +220,26 @@ class AnalyticsPipeline:
             sentiment_negative_ratio=round(combined_sentiment["negative_ratio"], 3),
             sentiment_positive_samples=combined_sentiment.get("positive_samples"),
             sentiment_negative_samples=combined_sentiment.get("negative_samples"),
+            sentiment_neutral_ratio=round(combined_sentiment.get("neutral_ratio", 0.0), 3),
+            sentiment_by_year=sentiment_by_year,
+            sentiment_by_source={
+                "academic": {
+                    "positive_ratio": round(sentiment_by_type["academic"]["positive_ratio"], 3),
+                    "negative_ratio": round(sentiment_by_type["academic"]["negative_ratio"], 3),
+                    "neutral_ratio": round(sentiment_by_type["academic"].get("neutral_ratio", 0.0), 3),
+                    "positive_count": sentiment_by_type["academic"]["positive_count"],
+                    "negative_count": sentiment_by_type["academic"]["negative_count"],
+                    "neutral_count": sentiment_by_type["academic"]["neutral_count"],
+                },
+                "news": {
+                    "positive_ratio": round(sentiment_by_type["news"]["positive_ratio"], 3),
+                    "negative_ratio": round(sentiment_by_type["news"]["negative_ratio"], 3),
+                    "neutral_ratio": round(sentiment_by_type["news"].get("neutral_ratio", 0.0), 3),
+                    "positive_count": sentiment_by_type["news"]["positive_count"],
+                    "negative_count": sentiment_by_type["news"]["negative_count"],
+                    "neutral_count": sentiment_by_type["news"]["neutral_count"],
+                },
+            },
             top_themes=themes,
             top_funders=market.get("funder_counts"),
             field_narrative=narrative.get("narrative") if narrative else None,

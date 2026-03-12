@@ -118,6 +118,9 @@ class FieldStatsResponse(BaseModel):
     news_article_count: int = 0
     sentiment_positive_ratio: float = 0.0
     sentiment_negative_ratio: float = 0.0
+    sentiment_neutral_ratio: float = 0.0
+    sentiment_by_year: dict = {}
+    sentiment_by_source: dict = {}
     sentiment_positive_samples: list[dict] | None = None
     sentiment_negative_samples: list[dict] | None = None
     top_themes: list[str] | None = None

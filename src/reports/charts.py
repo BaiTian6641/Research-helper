@@ -78,3 +78,103 @@ def build_top_cited_bar(top_cited: list) -> go.Figure:
         margin=dict(l=300),
     )
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Sentiment charts
+# ---------------------------------------------------------------------------
+
+def sentiment_donut_chart(
+    positive_count: int,
+    negative_count: int,
+    neutral_count: int,
+    title: str = "Sentiment Distribution",
+) -> go.Figure:
+    """Donut chart showing positive / neutral / negative sentence distribution."""
+    labels, values, colors = [], [], []
+    for label, count, color in [
+        ("Positive", positive_count, "#2ECC71"),
+        ("Neutral",  neutral_count,  "#95A5A6"),
+        ("Negative", negative_count, "#E74C3C"),
+    ]:
+        if count > 0:
+            labels.append(label)
+            values.append(count)
+            colors.append(color)
+    if not values:
+        return go.Figure()
+    fig = go.Figure(data=[go.Pie(
+        labels=labels,
+        values=values,
+        hole=0.45,
+        marker=dict(colors=colors),
+        textinfo="label+percent",
+        hovertemplate="%{label}: %{value}<extra></extra>",
+    )])
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=380,
+        legend=dict(orientation="h", y=-0.1),
+    )
+    return fig
+
+
+def sentiment_by_source_chart(academic: dict, news: dict) -> go.Figure:
+    """Grouped bar chart: academic vs news/web sentiment proportions (%)."""
+    labels = ["Academic Papers", "News / Web"]
+    fig = go.Figure(data=[
+        go.Bar(
+            name="Positive",
+            x=labels,
+            y=[academic.get("positive_ratio", 0) * 100, news.get("positive_ratio", 0) * 100],
+            marker_color="#2ECC71",
+        ),
+        go.Bar(
+            name="Neutral",
+            x=labels,
+            y=[academic.get("neutral_ratio", 0) * 100, news.get("neutral_ratio", 0) * 100],
+            marker_color="#95A5A6",
+        ),
+        go.Bar(
+            name="Negative",
+            x=labels,
+            y=[academic.get("negative_ratio", 0) * 100, news.get("negative_ratio", 0) * 100],
+            marker_color="#E74C3C",
+        ),
+    ])
+    fig.update_layout(
+        title="Sentiment by Source Type",
+        yaxis_title="Proportion (%)",
+        barmode="group",
+        template="plotly_white",
+        height=380,
+        legend=dict(orientation="h", y=-0.15),
+    )
+    return fig
+
+
+def sentiment_by_year_chart(sentiment_by_year: dict) -> go.Figure:
+    """Stacked bar chart: positive / neutral / negative counts per publication year."""
+    if not sentiment_by_year:
+        return go.Figure()
+    years = sorted(sentiment_by_year.keys())
+    pos = [sentiment_by_year[y].get("positive_count", 0) for y in years]
+    neu = [sentiment_by_year[y].get("neutral_count",  0) for y in years]
+    neg = [sentiment_by_year[y].get("negative_count", 0) for y in years]
+    fig = go.Figure(data=[
+        go.Bar(name="Positive", x=years, y=pos, marker_color="#2ECC71"),
+        go.Bar(name="Neutral",  x=years, y=neu, marker_color="#95A5A6"),
+        go.Bar(name="Negative", x=years, y=neg, marker_color="#E74C3C"),
+    ])
+    fig.update_layout(
+        title="Sentiment Trend by Year",
+        xaxis_title="Year",
+        yaxis_title="Sentence Count",
+        barmode="stack",
+        template="plotly_white",
+        height=420,
+        legend=dict(orientation="h", y=-0.15),
+    )
+    return fig
+

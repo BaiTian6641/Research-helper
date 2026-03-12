@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import streamlit as st
 import plotly.graph_objects as go
 
 
@@ -86,3 +87,33 @@ def citation_distribution_chart(top_cited: list) -> go.Figure:
         margin=dict(l=300),
     )
     return fig
+
+
+def export_chart_buttons(fig: go.Figure, filename_base: str = "chart") -> None:
+    """Render download buttons for a Plotly chart.
+
+    Always provides interactive HTML export.
+    Provides PNG export when the ``kaleido`` package is installed.
+    """
+    col1, col2 = st.columns(2)
+    html_bytes = fig.to_html(include_plotlyjs="cdn").encode("utf-8")
+    with col1:
+        st.download_button(
+            label="⬇ Export HTML",
+            data=html_bytes,
+            file_name=f"{filename_base}.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+    with col2:
+        try:
+            png_bytes = fig.to_image(format="png", width=1200, height=600, scale=2)
+            st.download_button(
+                label="⬇ Export PNG",
+                data=png_bytes,
+                file_name=f"{filename_base}.png",
+                mime="image/png",
+                use_container_width=True,
+            )
+        except Exception:
+            st.caption("PNG export: `pip install kaleido`")

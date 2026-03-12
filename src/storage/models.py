@@ -218,6 +218,9 @@ class FieldStats:
     sentiment_negative_ratio: float = 0.0
     sentiment_positive_samples: list[dict] | None = None
     sentiment_negative_samples: list[dict] | None = None
+    sentiment_neutral_ratio: float = 0.0
+    sentiment_by_year: dict | None = None   # {year_str: {positive_count, negative_count, neutral_count, *_ratio}}
+    sentiment_by_source: dict | None = None  # {"academic": {...}, "news": {...}}
 
     # LLM outputs
     top_themes: list[str] | None = None
@@ -254,6 +257,9 @@ class FieldStats:
             "sentiment_negative_ratio": self.sentiment_negative_ratio,
             "sentiment_positive_samples": self.sentiment_positive_samples,
             "sentiment_negative_samples": self.sentiment_negative_samples,
+            "sentiment_neutral_ratio": self.sentiment_neutral_ratio,
+            "sentiment_by_year": self.sentiment_by_year,
+            "sentiment_by_source": self.sentiment_by_source,
             "top_themes": self.top_themes,
             "top_funders": self.top_funders,
             "field_narrative": self.field_narrative,
