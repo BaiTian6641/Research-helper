@@ -155,25 +155,56 @@ class LLMClient:
                 raw_text = resp.json()["choices"][0]["message"]["content"]
 
         # Strip reasoning/thinking blocks (Qwen3.5, DeepSeek-R1, etc.)
-        raw_text = re.sub(r"<think>[\s\S]*?</think>", "", raw_text).strip()
+        # Handle both closed and unclosed <think> tags.
+        raw_text = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE)
+        # Unclosed <think> — strip from the opening tag to end of string.
+        raw_text = re.sub(r"<think>[\s\S]*$", "", raw_text, flags=re.IGNORECASE)
+        raw_text = raw_text.strip()
 
-        # Parse JSON — handle common model quirks
+        return self._parse_json_safe(raw_text)
+
+    # ------------------------------------------------------------------
+    # JSON extraction helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_json_safe(raw_text: str) -> dict | list:
+        """Try progressively more lenient strategies to extract JSON.
+
+        Uses JSONDecoder.raw_decode() so trailing garbage (extra text after
+        the closing brace) is silently ignored rather than causing a failure.
+        """
+        text = raw_text.strip()
+
+        # 1. Direct parse — happy path
         try:
-            return json.loads(raw_text)
+            return json.loads(text)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
+            pass
 
-            match = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw_text)
-            if match:
+        # 2. Markdown code block: ```json ... ```
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+        if match:
+            try:
                 return json.loads(match.group(1).strip())
-            # Try to find first { or [ and parse from there
-            for start_char, end_char in [("{", "}"), ("[", "]")]:
-                start_idx = raw_text.find(start_char)
-                end_idx = raw_text.rfind(end_char)
-                if start_idx != -1 and end_idx != -1:
-                    return json.loads(raw_text[start_idx : end_idx + 1])
-            logger.error("Failed to parse LLM JSON response: %s", raw_text[:200])
-            return {}
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Use raw_decode() starting from the first { or [ —
+        #    correctly ignores trailing text / extra objects.
+        decoder = json.JSONDecoder()
+        for start_char in ("{" , "["):
+            idx = text.find(start_char)
+            if idx == -1:
+                continue
+            try:
+                obj, _ = decoder.raw_decode(text, idx)
+                return obj
+            except json.JSONDecodeError:
+                pass
+
+        logger.error("Failed to parse LLM JSON response: %s", raw_text[:500])
+        return {}
 
     async def is_model_available(self) -> bool:
         """Check if the configured model is available on the server.

@@ -14,6 +14,7 @@ from src.llm.prompts import (
     PROPOSAL_CLAIM_EXTRACTION_PROMPT,
     format_abstracts_batch,
 )
+from src.llm.safety import sanitise_proposal, sanitise_abstract, sanitise_title
 from src.storage.models import Paper, ProposalAnalysis
 
 logger = logging.getLogger(__name__)
@@ -32,8 +33,13 @@ class ProposalAnalyzer:
     ) -> ProposalAnalysis:
         """Run full analysis: claim extraction → gap analysis → scoring."""
 
+        # Sanitise proposal text before any LLM interaction.
+        # This is the highest-risk input surface — user-supplied or pasted text
+        # may contain adversarial instructions from untrusted third parties.
+        safe_proposal = sanitise_proposal(proposal_text)
+
         # 1. Extract claims from the proposal
-        claims = await self._extract_claims(proposal_text)
+        claims = await self._extract_claims(safe_proposal)
 
         # 2. Build papers context for gap analysis
         papers_text = self._build_papers_text(papers, max_papers=50)
@@ -61,7 +67,7 @@ class ProposalAnalyzer:
         # 6. Build result
         result = ProposalAnalysis(
             id=uuid.uuid4().hex[:16],
-            proposal_text=proposal_text[:5000],  # truncate for storage
+            proposal_text=safe_proposal[:5000],  # store sanitised version
             run_at=datetime.utcnow(),
             novelty_score=novelty_score,
             top_overlapping_papers=json.dumps(overlapping),
@@ -72,7 +78,10 @@ class ProposalAnalyzer:
         return result
 
     async def _extract_claims(self, proposal_text: str) -> list[dict]:
-        """Use LLM to extract claims from the proposal."""
+        """Use LLM to extract claims from the proposal.
+
+        ``proposal_text`` is expected to already be sanitised by the caller.
+        """
         prompt = PROPOSAL_CLAIM_EXTRACTION_PROMPT.format(
             proposal_text=proposal_text[:4000]
         )
@@ -96,11 +105,16 @@ class ProposalAnalyzer:
 
     @staticmethod
     def _build_papers_text(papers: list[Paper], max_papers: int = 50) -> str:
-        """Build a compact text of paper titles+abstracts for context."""
+        """Build a compact text of paper titles+abstracts for context.
+
+        Titles and abstracts are sanitised before embedding so that adversarial
+        content in scraped papers cannot influence gap-analysis output.
+        """
         lines: list[str] = []
         for i, p in enumerate(papers[:max_papers]):
-            abstract_snippet = (p.abstract or "")[:200]
-            lines.append(f"[{i}] {p.title} ({p.year}): {abstract_snippet}")
+            safe_title = sanitise_title(p.title or "")
+            safe_abstract = sanitise_abstract((p.abstract or "")[:200])
+            lines.append(f"[{i}] {safe_title} ({p.year}): {safe_abstract}")
         return "\n".join(lines)
 
     @staticmethod
