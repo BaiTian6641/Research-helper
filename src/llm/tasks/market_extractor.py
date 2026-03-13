@@ -17,6 +17,7 @@ async def extract_market_signals(
     llm_client: LLMClient,
     batch_size: int = 8,
     max_papers: int = 80,
+    token_callback=None,
 ) -> dict:
     """Extract industry/market signals from abstracts.
 
@@ -49,7 +50,7 @@ async def extract_market_signals(
         prompt = MARKET_EXTRACTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt)
+            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
             signals = result.get("signals", [])
             if isinstance(signals, list):
                 for s in signals:

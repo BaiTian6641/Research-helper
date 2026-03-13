@@ -8,6 +8,7 @@ Works with any OpenAI-compatible backend:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -36,6 +37,10 @@ _THINK_UNCLOSED_CONTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Default timeout profile: generous read timeout for long LLM generations
+# at 128K context with ~20 tok/s, 16K output tokens takes ~800s.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=15.0, read=900.0, write=30.0, pool=15.0)
+
 
 class LLMClient:
     """Thin wrapper around the OpenAI-compatible chat completions API."""
@@ -44,54 +49,81 @@ class LLMClient:
         self,
         model: str = "qwen35-reasoning",
         base_url: str = "http://localhost:8080",
-        timeout: int = 120,
+        timeout: float = 900.0,
         web_search: bool = False,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = _DEFAULT_TIMEOUT
         self.web_search = web_search
-        # Set before LLM calls to stream tokens to a callback; clear after.
+        # DEPRECATED: kept for backward compat but prefer passing token_callback
+        # as a parameter to complete() / complete_json() instead.
         self._stream_callback: Callable[[str], None] | None = None
 
     async def _complete_streaming(
         self,
         payload: dict[str, Any],
         token_callback: Callable[[str], None],
+        max_retries: int = 2,
     ) -> tuple[str, str]:
         """Stream SSE chunks from the server, call token_callback per delta.
 
+        Retries on transient connection errors (ReadTimeout, ReadError,
+        RemoteProtocolError) up to *max_retries* times with exponential backoff.
         Returns (full_text, finish_reason).
         """
         full_text = ""
         finish_reason = ""
         stream_payload = {**payload, "stream": True}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/chat/completions",
-                json=stream_payload,
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    data = line[6:]
-                    if data.strip() == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        choice = chunk["choices"][0]
-                        delta = choice["delta"].get("content") or ""
-                        if delta:
-                            full_text += delta
-                            token_callback(delta)
-                        # Capture the finish_reason from the final chunk
-                        fr = choice.get("finish_reason")
-                        if fr:
-                            finish_reason = fr
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{self.base_url}/v1/chat/completions",
+                        json=stream_payload,
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data = line[6:]
+                            if data.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                choice = chunk["choices"][0]
+                                delta = choice["delta"].get("content") or ""
+                                if delta:
+                                    full_text += delta
+                                    token_callback(delta)
+                                # Capture the finish_reason from the final chunk
+                                fr = choice.get("finish_reason")
+                                if fr:
+                                    finish_reason = fr
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+                # Success — break out of retry loop
+                break
+            except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                if attempt < max_retries:
+                    wait = 2 ** (attempt + 1)
+                    logger.warning(
+                        "Stream attempt %d/%d failed (%s: %s), retrying in %ds...",
+                        attempt + 1, max_retries + 1, type(exc).__name__, exc, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    # Reset for retry — previous partial text is lost
+                    full_text = ""
+                    finish_reason = ""
+                else:
+                    logger.error(
+                        "Stream failed after %d attempts: %s: %s",
+                        max_retries + 1, type(exc).__name__, exc,
+                    )
+                    raise
+
         return full_text, finish_reason
 
     async def health_check(self) -> bool:
@@ -126,6 +158,7 @@ class LLMClient:
         prompt: str,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        token_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Send a prompt and return the text response."""
         payload: dict[str, Any] = {
@@ -140,8 +173,10 @@ class LLMClient:
         }
         if self.web_search:
             payload["web_search_options"] = {"enable": True}
-        if self._stream_callback is not None:
-            text, _ = await self._complete_streaming(payload, self._stream_callback)
+        # Resolve callback: explicit parameter > legacy instance attribute
+        cb = token_callback or self._stream_callback
+        if cb is not None:
+            text, _ = await self._complete_streaming(payload, cb)
             return text
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
@@ -157,6 +192,7 @@ class LLMClient:
         schema: dict[str, Any] | None = None,
         temperature: float = 0.3,
         max_tokens: int = 16384,
+        token_callback: Callable[[str], None] | None = None,
     ) -> dict | list:
         """Send a prompt with JSON format enforcement and return parsed JSON."""
         # For reasoning models (Qwen3, DeepSeek-R1) add an explicit
@@ -186,9 +222,11 @@ class LLMClient:
             payload["web_search_options"] = {"enable": True}
 
         finish_reason = ""
-        if self._stream_callback is not None:
+        # Resolve callback: explicit parameter > legacy instance attribute
+        cb = token_callback or self._stream_callback
+        if cb is not None:
             raw_text, finish_reason = await self._complete_streaming(
-                payload, self._stream_callback
+                payload, cb
             )
         else:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

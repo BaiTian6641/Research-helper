@@ -17,6 +17,7 @@ async def generate_narrative(
     stats: FieldStats,
     llm_client: LLMClient,
     sample_size: int = 20,
+    token_callback=None,
 ) -> dict:
     """Generate a 3-5 paragraph field overview.
 
@@ -53,7 +54,7 @@ async def generate_narrative(
     )
 
     try:
-        result = await llm_client.complete_json(prompt, temperature=0.7, max_tokens=16384)
+        result = await llm_client.complete_json(prompt, temperature=0.7, max_tokens=16384, token_callback=token_callback)
         return {
             "narrative": result.get("narrative", ""),
             "maturity_label": result.get("maturity_label", "Unknown"),

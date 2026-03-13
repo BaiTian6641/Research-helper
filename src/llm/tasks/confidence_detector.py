@@ -17,6 +17,7 @@ async def detect_confidence(
     llm_client: LLMClient,
     batch_size: int = 8,
     max_papers: int = 80,
+    token_callback=None,
 ) -> dict:
     """Detect claim strength in abstract result sentences.
 
@@ -50,7 +51,7 @@ async def detect_confidence(
         prompt = CONFIDENCE_DETECTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt)
+            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
             claims = result.get("claims", [])
             if isinstance(claims, list):
                 for c in claims:

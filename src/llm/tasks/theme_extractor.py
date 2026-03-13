@@ -17,6 +17,7 @@ async def extract_themes(
     llm_client: LLMClient,
     batch_size: int = 8,
     max_papers: int = 80,
+    token_callback=None,
 ) -> list[str]:
     """Extract top research themes from paper abstracts via LLM.
 
@@ -40,7 +41,7 @@ async def extract_themes(
         prompt = THEME_EXTRACTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt)
+            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
             themes = result.get("themes", [])
             if isinstance(themes, list):
                 all_themes.extend(str(t) for t in themes)

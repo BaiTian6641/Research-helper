@@ -6,6 +6,10 @@ import json
 
 import httpx
 
+# Generous timeout for streaming: LLM generation at 128K context can take minutes.
+# connect=15s, read=900s (15 min), write=30s, pool=15s
+_STREAM_TIMEOUT = httpx.Timeout(connect=15.0, read=900.0, write=30.0, pool=15.0)
+
 
 class APIClient:
     """Synchronous wrapper around the FastAPI backend."""
@@ -90,7 +94,7 @@ class APIClient:
         if web_sources is not None:
             body["web_sources"] = web_sources
 
-        with httpx.Client(timeout=None) as c:
+        with httpx.Client(timeout=_STREAM_TIMEOUT) as c:
             with c.stream(
                 "POST",
                 f"{self.base_url}/search/stream",
@@ -131,7 +135,7 @@ class APIClient:
         if year_end:
             body["year_end"] = year_end
 
-        with httpx.Client(timeout=None) as c:
+        with httpx.Client(timeout=_STREAM_TIMEOUT) as c:
             with c.stream(
                 "POST",
                 f"{self.base_url}/analyze/stream",

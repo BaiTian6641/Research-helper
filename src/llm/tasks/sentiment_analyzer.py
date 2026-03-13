@@ -23,6 +23,7 @@ async def analyze_sentiment_llm(
     llm_client: LLMClient,
     batch_size: int = 8,
     max_papers: int = 80,
+    token_callback=None,
 ) -> dict:
     """Classify each abstract as positive/negative/neutral using the LLM.
 
@@ -53,7 +54,7 @@ async def analyze_sentiment_llm(
         prompt = LLM_SENTIMENT_ANALYSIS_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt)
+            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
             for item in result.get("classifications", []):
                 if not isinstance(item, dict):
                     continue

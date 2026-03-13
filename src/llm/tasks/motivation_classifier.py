@@ -17,6 +17,7 @@ async def classify_motivation(
     llm_client: LLMClient,
     batch_size: int = 8,
     max_papers: int = 80,
+    token_callback=None,
 ) -> dict:
     """Classify problem/motivation sentences in abstracts.
 
@@ -51,7 +52,7 @@ async def classify_motivation(
             total_sentences += len([s for s in abstract.split(".") if len(s.strip()) > 10])
 
         try:
-            result = await llm_client.complete_json(prompt)
+            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
             sentences = result.get("sentences", [])
             if isinstance(sentences, list):
                 for s in sentences:

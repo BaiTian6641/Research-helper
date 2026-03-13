@@ -167,7 +167,11 @@ async def search_stream(req: schemas.SearchRequest):
         producer_task = asyncio.create_task(producer())
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=600.0)
+                except asyncio.TimeoutError:
+                    yield json.dumps({"type": "error", "message": "Pipeline timed out"}, ensure_ascii=False) + "\n"
+                    break
                 yield json.dumps(event, ensure_ascii=False) + "\n"
                 if event.get("type") == "done":
                     break

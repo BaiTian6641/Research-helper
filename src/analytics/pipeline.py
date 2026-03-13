@@ -165,12 +165,13 @@ class AnalyticsPipeline:
             # Supplement: LLM-classified paper sentiment gives richer sample sentences
             _emit("LLM: analyzing paper sentiment...")
             from src.llm.tasks.sentiment_analyzer import analyze_sentiment_llm
-            if token_callback:
-                self.llm_client._stream_callback = token_callback
             try:
-                llm_sent = await analyze_sentiment_llm(analysis_papers, self.llm_client)
-            finally:
-                self.llm_client._stream_callback = None
+                llm_sent = await analyze_sentiment_llm(
+                    analysis_papers, self.llm_client, token_callback=token_callback,
+                )
+            except Exception as exc:
+                logger.warning("LLM sentiment analysis failed: %s", exc)
+                llm_sent = {"positive_samples": [], "negative_samples": []}
             if llm_sent["positive_samples"] or llm_sent["negative_samples"]:
                 combined_sentiment = {
                     **combined_sentiment,
@@ -313,8 +314,6 @@ class AnalyticsPipeline:
             fc_client = self.field_context_client or self.llm_client
             if fc_client:
                 _emit("LLM: deep field-context analysis...")
-                if token_callback:
-                    fc_client._stream_callback = token_callback
                 try:
                     field_context = await analyze_field_context(
                         papers=analysis_papers,
@@ -323,9 +322,11 @@ class AnalyticsPipeline:
                         llm_client=fc_client,
                         most_cited_authors=citation.get("most_cited_authors", []),
                         top_cited_details=citation.get("top_cited_details", []),
+                        token_callback=token_callback,
                     )
-                finally:
-                    fc_client._stream_callback = None
+                except Exception as exc:
+                    logger.warning("Field context analysis failed: %s", exc)
+                    field_context = {}
                 stats.motivation_depth = field_context.get("motivation_depth")
                 stats.confidence_assessment = field_context.get("confidence_assessment")
                 stats.market_reality = field_context.get("market_reality")
@@ -407,27 +408,37 @@ class AnalyticsPipeline:
                 top_themes=themes,
             )
             _emit("LLM: generating narrative summary...")
-            self.llm_client._stream_callback = token_callback
             try:
-                narrative = await generate_narrative(papers, partial_stats, self.llm_client)
-            finally:
-                self.llm_client._stream_callback = None
+                narrative = await generate_narrative(
+                    papers, partial_stats, self.llm_client,
+                    token_callback=token_callback,
+                )
+            except Exception as exc:
+                logger.warning("Narrative generation failed: %s", exc)
+                narrative = {"narrative": "", "maturity_label": "Unknown", "open_questions": []}
 
         else:
             # ── Sequential mode: stream tokens per task ──
-            self.llm_client._stream_callback = token_callback
             try:
                 _emit(f"LLM: extracting themes ({n} papers)...", n)
-                themes = await extract_themes(papers, self.llm_client)
+                themes = await extract_themes(
+                    papers, self.llm_client, token_callback=token_callback,
+                )
 
                 _emit(f"LLM: classifying motivation ({n} papers)...", n)
-                motivation = await classify_motivation(papers, self.llm_client)
+                motivation = await classify_motivation(
+                    papers, self.llm_client, token_callback=token_callback,
+                )
 
                 _emit(f"LLM: detecting confidence ({n} papers)...", n)
-                confidence = await detect_confidence(papers, self.llm_client)
+                confidence = await detect_confidence(
+                    papers, self.llm_client, token_callback=token_callback,
+                )
 
                 _emit(f"LLM: extracting market signals ({n} papers)...", n)
-                market = await extract_market_signals(papers, self.llm_client)
+                market = await extract_market_signals(
+                    papers, self.llm_client, token_callback=token_callback,
+                )
 
                 # Build partial FieldStats for narrative generation
                 partial_stats = FieldStats(
@@ -439,9 +450,13 @@ class AnalyticsPipeline:
                     top_themes=themes,
                 )
                 _emit("LLM: generating narrative summary...")
-                narrative = await generate_narrative(papers, partial_stats, self.llm_client)
-            finally:
-                self.llm_client._stream_callback = None
+                narrative = await generate_narrative(
+                    papers, partial_stats, self.llm_client,
+                    token_callback=token_callback,
+                )
+            except Exception as exc:
+                logger.error("Sequential LLM pipeline error: %s", exc)
+                raise
 
         return motivation, confidence, market, themes, narrative
 

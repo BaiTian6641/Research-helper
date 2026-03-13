@@ -267,6 +267,7 @@ set "MODEL_ALIAS=crow-9b-opus"
 set "LLAMA_DEVICE_ARG="
 
 REM -- Select llama.cpp binary variant by GPU platform
+set "LLAMA_EXTRA_ARGS="
 if "!GPU_PLATFORM!"=="intel_arc" (
     set "LLAMA_FILTER=*sycl*x64*"
     set "LLAMA_DIR=%USERPROFILE%\llama-cpp-sycl"
@@ -277,15 +278,23 @@ if "!GPU_PLATFORM!"=="intel_arc" (
     set "LLAMA_FILTER=llama-*-bin-win-cuda-12*x64*"
     set "LLAMA_DIR=%USERPROFILE%\llama-cpp-cuda"
     set "LLAMA_DEVICE_ARG= --device CUDA0"
-    REM -- 16 GB VRAM: model ~5.2 GB + KV-cache @ 65536 ctx ~8 GB = 13.2 GB total (safe)
+    REM -- 16 GB VRAM: model ~5.2 GB + Q8 KV-cache @ 131072 ctx ~10 GB = 15.2 GB total
+    REM -- Uses flash-attn + Q8 KV quantization to fit 128K context in 16 GB
     REM -- np=1 keeps KV cache at one slot; academic analysis is single-user / sequential
     set "LLAMA_NGL=99"
-    set "LLAMA_CTX=65536"
+    set "LLAMA_CTX=131072"
     set "LLAMA_NP=1"
+    set "LLAMA_EXTRA_ARGS= -fa --cache-type-k q8_0 --cache-type-v q8_0"
+    if !VRAM_GB! LSS 12 (
+        REM -- 8-11 GB VRAM: use 32K context (safe with Q8 KV)
+        set "LLAMA_CTX=32768"
+        set "LLAMA_EXTRA_ARGS= -fa --cache-type-k q8_0 --cache-type-v q8_0"
+    )
     if !VRAM_GB! LSS 8 (
         set "LLAMA_NGL=28"
         set "LLAMA_CTX=16384"
         set "LLAMA_NP=1"
+        set "LLAMA_EXTRA_ARGS= -fa --cache-type-k q8_0 --cache-type-v q8_0"
     )
     if !VRAM_GB! LSS 6 set "LLAMA_NGL=18"
     if !VRAM_GB! LSS 4 set "LLAMA_NGL=8"
@@ -428,7 +437,7 @@ if errorlevel 1 (
             if "!GPU_PLATFORM!"=="intel_arc" (
                 start "llama-server (Intel Arc SYCL)" cmd /k "set PATH=!LLAMA_DIR!;%PATH% && set ONEAPI_DEVICE_SELECTOR=level_zero:0 && set ZES_ENABLE_SYSMAN=1 && set SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=1 && "!LLAMA_EXE!" -m "!GGUF_FILE!" -c !LLAMA_CTX! -np !LLAMA_NP! --alias !MODEL_ALIAS! --port 8080 --host 127.0.0.1!LLAMA_WEB_SEARCH_ARG!"
             ) else (
-                start "llama-server" cmd /k "set PATH=!LLAMA_DIR!;%PATH% && "!LLAMA_EXE!" -m "!GGUF_FILE!"!LLAMA_DEVICE_ARG! -ngl !LLAMA_NGL! -c !LLAMA_CTX! -np !LLAMA_NP! --alias !MODEL_ALIAS! --port 8080 --host 127.0.0.1!LLAMA_WEB_SEARCH_ARG!"
+                start "llama-server" cmd /k "set PATH=!LLAMA_DIR!;%PATH% && "!LLAMA_EXE!" -m "!GGUF_FILE!"!LLAMA_DEVICE_ARG! -ngl !LLAMA_NGL! -c !LLAMA_CTX! -np !LLAMA_NP!!LLAMA_EXTRA_ARGS! --alias !MODEL_ALIAS! --port 8080 --host 127.0.0.1!LLAMA_WEB_SEARCH_ARG!"
             )
             echo [INFO] Waiting for llama-server to become ready ^(up to 60 s^)...
             call :_wait_for_llama
