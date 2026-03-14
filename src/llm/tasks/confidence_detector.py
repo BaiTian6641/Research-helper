@@ -51,7 +51,7 @@ async def detect_confidence(
         prompt = CONFIDENCE_DETECTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
+            result = await llm_client.complete_json(prompt, max_tokens=8192, token_callback=token_callback)
             claims = result.get("claims", [])
             if isinstance(claims, list):
                 for c in claims:

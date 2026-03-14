@@ -62,6 +62,14 @@ SOURCES: dict[str, SourceInfo] = {
         requires_key=True,
         key_env_var="SPRINGER_API_KEY",
     ),
+    "nature": SourceInfo(
+        name="nature",
+        display_name="Nature / Nature Communications",
+        tier=2,
+        base_url="https://api.springernature.com/meta/v2/json",
+        requires_key=True,
+        key_env_var="SPRINGER_API_KEY",
+    ),
     "google_news": SourceInfo(
         name="google_news",
         display_name="Google News",

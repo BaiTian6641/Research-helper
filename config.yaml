@@ -1,7 +1,7 @@
 # Research Field Intelligence Tool — Configuration
 
 search:
-  max_results_per_source: 200
+  max_results_per_source: 500
   min_citations: 0
   year_start: 2015
   year_end: 2026
@@ -11,8 +11,13 @@ search:
     - openalex
     - pubmed
     - crossref
-  timeout_seconds: 30
+    - nature
+  timeout_seconds: 45
   retry_max: 3
+  # High-priority keywords — papers matching these terms are boosted in
+  # search results and receive extra weighting during analysis.
+  # Example: priority_keywords: ["CRISPR", "gene editing"]
+  priority_keywords: []
 
 dedup:
   title_similarity_threshold: 0.92

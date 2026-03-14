@@ -1,8 +1,16 @@
 """Search orchestrator — runs fetchers in parallel and deduplicates results.
 
-Academic fetchers iterate year-by-year within the user's date range to ensure
-balanced coverage (APIs tend to bias toward popular/recent papers).
-News fetchers query the full range at once.
+Two-phase strategy to maximise paper yield:
+ 1. **Full-range fetch** — every fetcher gets the entire year range with the
+    full ``max_results_per_source`` limit.  This is the primary collection
+    phase (most APIs already support native date-range filtering).
+ 2. **Year-balanced supplement** — for academic fetchers, run per-year
+    queries (capped at a modest ``supplement_per_year``) to backfill years
+    that may be under-represented in the relevance-sorted first pass.
+
+News fetchers always query once (RSS feeds are date-agnostic).
+Priority keywords trigger additional focused queries on the first two
+academic fetchers.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 from typing import AsyncIterator, Callable
 
 from rapidfuzz import fuzz
@@ -21,6 +30,9 @@ from src.searcher.semantic_scholar import SemanticScholarFetcher
 from src.searcher.openalex import OpenAlexFetcher
 from src.searcher.pubmed import PubMedFetcher
 from src.searcher.crossref import CrossrefFetcher
+from src.searcher.springer import SpringerFetcher
+from src.searcher.nature import NatureFetcher
+from src.searcher.ieee import IEEEFetcher
 from src.searcher.news_google import GoogleNewsFetcher
 from src.searcher.news_bing import BingNewsFetcher
 from src.storage.models import Paper
@@ -33,6 +45,9 @@ FETCHER_MAP: dict[str, type[AbstractFetcher]] = {
     "openalex": OpenAlexFetcher,
     "pubmed": PubMedFetcher,
     "crossref": CrossrefFetcher,
+    "springer": SpringerFetcher,
+    "nature": NatureFetcher,
+    "ieee": IEEEFetcher,
     "google_news": GoogleNewsFetcher,
     "bing_news": BingNewsFetcher,
 }
@@ -48,11 +63,13 @@ class SearchOrchestrator:
         max_results_per_source: int = 200,
         timeout: int = 30,
         title_similarity_threshold: float = 0.92,
+        priority_keywords: list[str] | None = None,
     ):
         self._source_names = sources or list(FETCHER_MAP.keys())
         self._max_results = max_results_per_source
         self._timeout = timeout
         self._sim_threshold = title_similarity_threshold
+        self._priority_keywords = [kw.strip().lower() for kw in (priority_keywords or []) if kw.strip()]
 
     async def search(
         self,
@@ -63,25 +80,20 @@ class SearchOrchestrator:
     ) -> list[Paper]:
         """Run all fetchers concurrently, deduplicate, return merged papers.
 
-        Academic fetchers iterate year-by-year so every year in the user's
-        range is represented.  News fetchers query the full range once.
+        Phase 1: full-range fetch with the entire ``max_results`` per fetcher.
+        Phase 2: year-balanced supplement for academic fetchers to ensure
+                 underrepresented years are covered.
+        Phase 3: priority keyword boost queries.
         """
         fetchers = self._build_fetchers()
         all_papers: list[Paper] = []
 
+        # ── Phase 1: full-range fetch ──
         tasks = []
         for fetcher in fetchers:
-            is_news = fetcher.name in NEWS_FETCHERS
-            if is_news or year_start is None or year_end is None:
-                # Single-shot fetch (news or no year range given)
-                tasks.append(
-                    self._fetch_one(fetcher, query, year_start, year_end, progress_callback)
-                )
-            else:
-                # Per-year academic fetch
-                tasks.append(
-                    self._fetch_per_year(fetcher, query, year_start, year_end, progress_callback)
-                )
+            tasks.append(
+                self._fetch_one(fetcher, query, year_start, year_end, progress_callback)
+            )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -95,8 +107,54 @@ class SearchOrchestrator:
                 if progress_callback:
                     progress_callback(f"{fetcher.name}: done", len(result))
 
+        # ── Phase 2: year-balanced supplement ──
+        # Only for academic fetchers when a year range is given and wide enough.
+        if year_start and year_end and (year_end - year_start) >= 3:
+            academic_fetchers = [
+                f for f in fetchers if f.name not in NEWS_FETCHERS
+            ]
+            if academic_fetchers:
+                if progress_callback:
+                    progress_callback("Supplementing year coverage...", 0)
+                supplement_tasks = []
+                for fetcher in academic_fetchers:
+                    supplement_tasks.append(
+                        self._supplement_years(
+                            fetcher, query, year_start, year_end,
+                            all_papers, progress_callback,
+                        )
+                    )
+                supp_results = await asyncio.gather(
+                    *supplement_tasks, return_exceptions=True,
+                )
+                for sr in supp_results:
+                    if not isinstance(sr, Exception):
+                        all_papers.extend(sr)
+
+        # ── Phase 3: priority keyword boost ──
+        if self._priority_keywords:
+            academic_fetchers = [f for f in fetchers if f.name not in NEWS_FETCHERS][:2]
+            if academic_fetchers and progress_callback:
+                progress_callback("Boosting priority keywords...", 0)
+            boost_tasks = []
+            for kw in self._priority_keywords:
+                for fetcher in academic_fetchers:
+                    boost_tasks.append(
+                        self._fetch_one(fetcher, kw, year_start, year_end, None)
+                    )
+            if boost_tasks:
+                boost_results = await asyncio.gather(*boost_tasks, return_exceptions=True)
+                for br in boost_results:
+                    if not isinstance(br, Exception):
+                        all_papers.extend(br)
+
         # Deduplicate
         deduped = self._deduplicate(all_papers)
+
+        # Tag papers that match priority keywords
+        if self._priority_keywords:
+            _tag_priority_matches(deduped, self._priority_keywords)
+
         logger.info(
             "Orchestrator: %d raw → %d deduped", len(all_papers), len(deduped)
         )
@@ -124,47 +182,66 @@ class SearchOrchestrator:
             query, self._max_results, year_start, year_end
         )
 
-    async def _fetch_per_year(
+    async def _supplement_years(
         self,
         fetcher: AbstractFetcher,
         query: str,
         year_start: int,
         year_end: int,
+        existing_papers: list[Paper],
         progress_callback: Callable[[str, int], None] | None,
     ) -> list[Paper]:
-        """Fetch papers year-by-year so every year is represented.
+        """Fill in years that are under-represented in the full-range fetch.
 
-        Allocates max_results evenly across years.  Each single-year fetch
-        runs sequentially per fetcher to avoid rate-limiting, but different
-        fetchers are parallelised at the caller level.
+        Counts existing papers per year, then queries individual gap years
+        to ensure balanced temporal coverage.
         """
+        year_counts: dict[int, int] = {}
+        for p in existing_papers:
+            if p.year:
+                year_counts[p.year] = year_counts.get(p.year, 0) + 1
+
         num_years = year_end - year_start + 1
-        per_year = max(self._max_results // num_years, 10)
+        avg = max(len(existing_papers) // max(num_years, 1), 1)
+        gap_threshold = max(avg // 3, 3)
+
+        gap_years = [
+            y for y in range(year_start, year_end + 1)
+            if year_counts.get(y, 0) < gap_threshold
+        ]
+        if not gap_years:
+            return []
 
         if progress_callback:
-            progress_callback(f"{fetcher.name}: searching {num_years} years...", 0)
+            progress_callback(
+                f"{fetcher.name}: filling {len(gap_years)} gap years...", 0,
+            )
 
+        supplement_per_year = 30
         all_papers: list[Paper] = []
-        for idx, year in enumerate(range(year_start, year_end + 1)):
-            # Rate-limit: pause between per-year requests (PubMed allows ~3 req/s
-            # without an API key; other APIs have similar limits)
+
+        for idx, year in enumerate(gap_years):
             if idx > 0:
                 await asyncio.sleep(1.5)
             try:
                 batch = await fetcher.fetch_and_normalise(
-                    query, per_year, year, year
+                    query, supplement_per_year, year, year,
                 )
                 all_papers.extend(batch)
                 if progress_callback:
                     progress_callback(
-                        f"{fetcher.name}: {year} ({len(batch)} papers)", len(batch)
+                        f"{fetcher.name}: supplement {year} (+{len(batch)})",
+                        len(batch),
                     )
             except Exception as e:
-                logger.warning("Fetcher %s year %d failed: %s", fetcher.name, year, e)
+                logger.warning(
+                    "Fetcher %s supplement year %d failed: %s",
+                    fetcher.name, year, e,
+                )
 
         logger.info(
-            "Fetcher %s per-year: %d papers across %d–%d",
-            fetcher.name, len(all_papers), year_start, year_end,
+            "Fetcher %s supplement: %d papers for %d gap years",
+            fetcher.name, len(all_papers), len(gap_years),
         )
         return all_papers
 
@@ -233,3 +310,30 @@ class SearchOrchestrator:
         t_src = set(json.loads(target.sources or "[]"))
         s_src = set(json.loads(source.sources or "[]"))
         target.sources = json.dumps(sorted(t_src | s_src))
+
+        # Merge quality flags — prefer higher-confidence values
+        if source.peer_reviewed and not target.peer_reviewed:
+            target.peer_reviewed = True
+        _TIER_RANK = {"high": 3, "medium": 2, "low": 1}
+        src_rank = _TIER_RANK.get(source.confidence_tier or "", 0)
+        tgt_rank = _TIER_RANK.get(target.confidence_tier or "", 0)
+        if src_rank > tgt_rank:
+            target.confidence_tier = source.confidence_tier
+
+
+def _tag_priority_matches(papers: list[Paper], priority_keywords: list[str]) -> None:
+    """Mark papers whose title/abstract matches a priority keyword.
+
+    Stores the result in paper.keywords JSON list (appends a
+    ``__priority__`` tag) so downstream analytics can detect it cheaply.
+    """
+    if not priority_keywords:
+        return
+    patterns = [re.compile(re.escape(kw), re.IGNORECASE) for kw in priority_keywords]
+    for p in papers:
+        text = f"{p.title or ''} {p.abstract or ''}"
+        if any(pat.search(text) for pat in patterns):
+            kws = json.loads(p.keywords or "[]")
+            if "__priority__" not in kws:
+                kws.append("__priority__")
+                p.keywords = json.dumps(kws)

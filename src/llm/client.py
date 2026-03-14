@@ -193,6 +193,7 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 16384,
         token_callback: Callable[[str], None] | None = None,
+        _retry: bool = True,
     ) -> dict | list:
         """Send a prompt with JSON format enforcement and return parsed JSON."""
         # For reasoning models (Qwen3, DeepSeek-R1) add an explicit
@@ -217,6 +218,10 @@ class LLMClient:
             "max_tokens": max_tokens,
             "stream": False,
             "response_format": {"type": "json_object"},
+            # Disable thinking mode at the template level for llama.cpp /
+            # Qwen3-series backends.  Backends that don't support this field
+            # silently ignore it, so it is safe to include unconditionally.
+            "chat_template_kwargs": {"thinking": False},
         }
         if self.web_search:
             payload["web_search_options"] = {"enable": True}
@@ -271,6 +276,26 @@ class LLMClient:
         think_json = self._extract_json_from_think(raw_text)
         if think_json is not None:
             return think_json
+
+        # The model consumed the entire token budget on <think> reasoning with
+        # nothing left for JSON.  Retry *once* with double the token budget so
+        # there is headroom beyond the reasoning chain.
+        if finish_reason == "length" and _retry:
+            retry_tokens = min(max_tokens * 2, 32768)
+            logger.warning(
+                "LLM returned empty content after stripping think blocks "
+                "(finish_reason=length, max_tokens=%d). "
+                "Retrying with max_tokens=%d.",
+                max_tokens, retry_tokens,
+            )
+            return await self.complete_json(
+                prompt,
+                schema=schema,
+                temperature=temperature,
+                max_tokens=retry_tokens,
+                token_callback=token_callback,
+                _retry=False,
+            )
 
         logger.error(
             "LLM returned empty content after stripping think blocks "

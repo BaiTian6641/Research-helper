@@ -1,7 +1,8 @@
-"""PubMed / E-utilities fetcher."""
+"""PubMed / E-utilities fetcher with pagination."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -27,7 +28,6 @@ class PubMedFetcher(AbstractFetcher):
         year_start: int | None = None,
         year_end: int | None = None,
     ) -> list[dict]:
-        # Step 1: esearch to get PMIDs
         term = query
         if year_start and year_end:
             term += f" AND {year_start}:{year_end}[dp]"
@@ -37,34 +37,57 @@ class PubMedFetcher(AbstractFetcher):
             term += f" AND 1900:{year_end}[dp]"
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await self._request_with_retry(
-                client, "GET", self.ESEARCH_URL,
-                params={
-                    "db": "pubmed",
-                    "term": term,
-                    "retmax": min(max_results, 1000),
-                    "retmode": "json",
-                },
-            )
-            resp.raise_for_status()
-            search_data = resp.json()
-            id_list = search_data.get("esearchresult", {}).get("idlist", [])
-            if not id_list:
+            # Step 1: paginated esearch to collect PMIDs
+            all_pmids: list[str] = []
+            retstart = 0
+            batch_size = 500  # PubMed esearch max retmax = 10000
+            while len(all_pmids) < max_results:
+                resp = await self._request_with_retry(
+                    client, "GET", self.ESEARCH_URL,
+                    params={
+                        "db": "pubmed",
+                        "term": term,
+                        "retstart": retstart,
+                        "retmax": min(batch_size, max_results - len(all_pmids)),
+                        "retmode": "json",
+                        "sort": "relevance",
+                    },
+                )
+                resp.raise_for_status()
+                search_data = resp.json()
+                id_list = search_data.get("esearchresult", {}).get("idlist", [])
+                if not id_list:
+                    break
+                all_pmids.extend(id_list)
+                retstart += len(id_list)
+                total = int(search_data.get("esearchresult", {}).get("count", 0))
+                if retstart >= total:
+                    break
+                # PubMed allows ~3 requests/sec without API key
+                await asyncio.sleep(0.4)
+
+            if not all_pmids:
                 return []
 
-            # Step 2: efetch to get full records (XML)
-            pmids = ",".join(id_list[:max_results])
-            resp2 = await self._request_with_retry(
-                client, "GET", self.EFETCH_URL,
-                params={
-                    "db": "pubmed",
-                    "id": pmids,
-                    "retmode": "xml",
-                },
-            )
-            resp2.raise_for_status()
+            # Step 2: efetch in chunks of 200 (XML response can be large)
+            results: list[dict] = []
+            efetch_batch = 200
+            for i in range(0, len(all_pmids), efetch_batch):
+                chunk = all_pmids[i : i + efetch_batch]
+                resp2 = await self._request_with_retry(
+                    client, "GET", self.EFETCH_URL,
+                    params={
+                        "db": "pubmed",
+                        "id": ",".join(chunk),
+                        "retmode": "xml",
+                    },
+                )
+                resp2.raise_for_status()
+                results.extend(self._parse_xml(resp2.text))
+                if i + efetch_batch < len(all_pmids):
+                    await asyncio.sleep(0.4)
 
-        return self._parse_xml(resp2.text)
+        return results
 
     def _parse_xml(self, xml_text: str) -> list[dict]:
         results: list[dict] = []
@@ -158,4 +181,6 @@ class PubMedFetcher(AbstractFetcher):
             url=f"https://pubmed.ncbi.nlm.nih.gov/{raw.get('pmid', '')}" if raw.get("pmid") else None,
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=True,
+            confidence_tier="high",
         )

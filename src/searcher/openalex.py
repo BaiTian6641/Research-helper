@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -64,6 +65,10 @@ class OpenAlexFetcher(AbstractFetcher):
                     break
                 results.extend(batch)
                 page += 1
+                if len(batch) < per_page:
+                    break  # last page
+                # OpenAlex polite pool: ~10 req/s; add small delay
+                await asyncio.sleep(0.2)
 
         return results[:max_results]
 
@@ -122,6 +127,8 @@ class OpenAlexFetcher(AbstractFetcher):
             url=raw.get("id"),  # OpenAlex URL
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=venue_type == "journal",
+            confidence_tier="high" if venue_type == "journal" else "medium",
         )
 
     @staticmethod

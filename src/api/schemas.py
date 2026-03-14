@@ -71,6 +71,8 @@ class PaperResponse(BaseModel):
     doi: str | None = None
     url: str | None = None
     sources: list[str] = []
+    relevance_score: float | None = None
+    relevance_label: str | None = None
 
     class Config:
         from_attributes = True
@@ -142,6 +144,15 @@ class FieldStatsResponse(BaseModel):
     gaps_and_opportunities: list[str] | None = None
     field_specific_risks: list[str] | None = None
     recommended_focus_areas: list[str] | None = None
+    # Source quality
+    peer_reviewed_ratio: float = 0.0
+    confidence_tier_counts: dict[str, int] = {}
+    # Author background analysis
+    author_profiles: list[dict] | None = None
+    # Relevance filtering
+    filtered_paper_ids: list[str] = []
+    filtered_paper_count: int = 0
+    relevance_filter_log: list[dict] | None = None
     # Prompt-injection detections collected during this analysis run
     security_alerts: list[dict] = []
 

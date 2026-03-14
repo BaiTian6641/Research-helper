@@ -106,6 +106,23 @@ class AnalyticsPipeline:
             len(papers), len(academic_papers), len(news_articles),
         )
 
+        # ── Post-processing: relevance filter ──
+        _emit("Filtering irrelevant papers...")
+        from src.llm.tasks.relevance_filter import filter_irrelevant_papers
+        llm_for_filter = self.llm_client if self._llm_available else None
+        academic_papers, relevance_log = await filter_irrelevant_papers(
+            academic_papers, query, llm_client=llm_for_filter,
+            token_callback=token_callback,
+        )
+        filtered_ids = [e["id"] for e in relevance_log if not e["kept"]]
+        filtered_count = len(filtered_ids)
+        if filtered_count:
+            _emit(f"Removed {filtered_count} unrelated papers (kept {len(academic_papers)})")
+            logger.info(
+                "Relevance filter removed %d papers: %s",
+                filtered_count, filtered_ids[:10],
+            )
+
         # Determine year range from academic papers
         years = [p.year for p in academic_papers if p.year]
         if not years:
@@ -202,12 +219,18 @@ class AnalyticsPipeline:
         # Sentiment score from combined text (-100 to +100)
         combined_sentiment_score = combined_sentiment["sentiment_score"]
 
+        # ── Source quality metrics (needed by score functions below) ──
+        all_academic = analysis_papers if analysis_papers else papers
+        peer_count = sum(1 for p in all_academic if p.peer_reviewed)
+        peer_reviewed_ratio = round(peer_count / max(len(all_academic), 1), 3)
+
         interest = compute_interest_score(
             total_papers=trend["total_papers"],
             growth_rate_pct=trend["growth_rate_pct"],
             cumulative_citations=citation["cumulative_citations"],
             avg_citation_velocity=citation["avg_citation_velocity"],
             news_article_count=news_count,
+            peer_reviewed_ratio=peer_reviewed_ratio,
         )
 
         motivation_score = compute_motivation_score(
@@ -222,6 +245,7 @@ class AnalyticsPipeline:
             negative_count=confidence["negative_count"],
             total_result_sentences=confidence["total_result_sentences"],
             public_sentiment_score=combined_sentiment_score,
+            peer_reviewed_ratio=peer_reviewed_ratio,
         )
 
         # Market: compute ratios
@@ -245,6 +269,12 @@ class AnalyticsPipeline:
             public_sentiment=public_sentiment,
             field_weights=field_weights,
         )
+
+        tier_counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        for p in papers:
+            tier = p.confidence_tier or ("low" if (p.venue_type or "") in NEWS_VENUE_TYPES else "medium")
+            if tier in tier_counts:
+                tier_counts[tier] += 1
 
         # Assemble FieldStats
         stats = FieldStats(
@@ -306,6 +336,13 @@ class AnalyticsPipeline:
             field_category=field_profile.field_category,
             field_display_name=field_profile.field_category.replace("_", " ").title(),
             field_pace=field_profile.pace,
+            # Source quality
+            peer_reviewed_ratio=peer_reviewed_ratio,
+            confidence_tier_counts=tier_counts,
+            # Relevance filtering
+            filtered_paper_ids=filtered_ids,
+            filtered_paper_count=filtered_count,
+            relevance_filter_log=relevance_log if relevance_log else None,
         )
 
         # ── Part E: Deep field-context analysis (LLM, needs assembled stats) ──
@@ -334,6 +371,21 @@ class AnalyticsPipeline:
                 stats.gaps_and_opportunities = field_context.get("gaps_and_opportunities")
                 stats.field_specific_risks = field_context.get("field_specific_risks")
                 stats.recommended_focus_areas = field_context.get("recommended_focus_areas")
+
+            # ── Part E2: Author background analysis ──
+            if fc_client:
+                _emit("LLM: author background analysis...")
+                from src.llm.tasks.author_profiler import profile_top_authors
+                try:
+                    author_profiles = await profile_top_authors(
+                        papers=analysis_papers,
+                        most_cited_authors=citation.get("most_cited_authors", []),
+                        llm_client=fc_client,
+                        token_callback=token_callback,
+                    )
+                    stats.author_profiles = author_profiles
+                except Exception as exc:
+                    logger.warning("Author background analysis failed: %s", exc)
 
         _emit("Pipeline complete.", len(papers))
         return stats

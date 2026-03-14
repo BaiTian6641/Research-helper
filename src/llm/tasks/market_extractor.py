@@ -50,7 +50,7 @@ async def extract_market_signals(
         prompt = MARKET_EXTRACTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
+            result = await llm_client.complete_json(prompt, max_tokens=8192, token_callback=token_callback)
             signals = result.get("signals", [])
             if isinstance(signals, list):
                 for s in signals:

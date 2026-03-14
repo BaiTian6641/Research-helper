@@ -40,8 +40,9 @@ class SQLiteStore:
                     new_count += 1
                 else:
                     # Merge: keep richer data
-                    if paper.abstract and not existing.abstract:
-                        existing.abstract = paper.abstract
+                    if paper.abstract:
+                        if not existing.abstract or len(paper.abstract) > len(existing.abstract):
+                            existing.abstract = paper.abstract
                     if paper.citations and (existing.citations is None or paper.citations > existing.citations):
                         existing.citations = paper.citations
                     if paper.citation_velocity and not existing.citation_velocity:
@@ -52,6 +53,14 @@ class SQLiteStore:
                     old_src = set(json.loads(existing.sources or "[]"))
                     new_src = set(json.loads(paper.sources or "[]"))
                     existing.sources = json.dumps(sorted(old_src | new_src))
+                    # Merge quality flags — prefer higher-confidence values
+                    if paper.peer_reviewed and not existing.peer_reviewed:
+                        existing.peer_reviewed = True
+                    _TIER_RANK = {"high": 3, "medium": 2, "low": 1}
+                    src_rank = _TIER_RANK.get(paper.confidence_tier or "", 0)
+                    tgt_rank = _TIER_RANK.get(existing.confidence_tier or "", 0)
+                    if src_rank > tgt_rank:
+                        existing.confidence_tier = paper.confidence_tier
             session.commit()
         return new_count
 

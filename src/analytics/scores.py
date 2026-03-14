@@ -17,10 +17,12 @@ def compute_interest_score(
     cumulative_citations: int,
     avg_citation_velocity: float,
     news_article_count: int = 0,
+    peer_reviewed_ratio: float = 0.0,
 ) -> float:
     """Interest score: statistical + public attention.
 
     Academic research is slow — news coverage reflects real-time interest.
+    Peer-reviewed ratio boosts confidence in the academic signal.
     """
     academic_raw = (
         0.25 * math.log(total_papers + 1)
@@ -28,13 +30,16 @@ def compute_interest_score(
         + 0.20 * math.log(cumulative_citations + 1)
         + 0.20 * _sigmoid(avg_citation_velocity / 10.0)
     )
-    academic_norm = _normalise(academic_raw, ceiling=10.0)
+    # Peer-reviewed papers are a stronger signal: up to 10% bonus
+    pr_bonus = peer_reviewed_ratio * 0.10
+    academic_norm = _normalise(academic_raw + pr_bonus, ceiling=10.0)
 
-    # News boost: each news article adds signal, diminishing returns
+    # News boost: each news article adds signal, diminishing returns.
+    # News is lower-confidence — capped contribution.
     news_boost = _sigmoid(news_article_count / 20.0 - 1.0) if news_article_count > 0 else 0.0
 
-    # Blend: 70% academic, 30% public attention
-    blended = 0.70 * academic_norm + 0.30 * news_boost
+    # Blend: 75% academic (peer-reviewed weighted), 25% public attention
+    blended = 0.75 * academic_norm + 0.25 * news_boost
     return min(round(blended * 100, 1), 100.0)
 
 
@@ -59,12 +64,14 @@ def compute_confidence_score(
     negative_count: int,
     total_result_sentences: int,
     public_sentiment_score: float = 0.0,
+    peer_reviewed_ratio: float = 0.0,
 ) -> float:
     """Confidence score: blends academic claim strength with public sentiment.
 
     Academic confidence: weighted sum of claim-strength labels.
+    Peer-reviewed ratio boosts the academic component (higher evidence quality).
     Public sentiment adjusts: positive public reception boosts confidence,
-    negative reception dampens it.
+    negative reception dampens it — but at reduced weight vs. peer-reviewed.
     """
     if total_result_sentences <= 0:
         academic_conf = 0.0
@@ -76,16 +83,18 @@ def compute_confidence_score(
             + 0.0 * negative_count
         )
         academic_conf = min((weighted / total_result_sentences) * 100, 100.0)
+        # Peer-reviewed evidence is more trustworthy — up to 15% bonus
+        academic_conf = min(academic_conf * (1.0 + 0.15 * peer_reviewed_ratio), 100.0)
 
     # Public sentiment is -100 to +100; normalise to 0–100 scale
     public_norm = (public_sentiment_score + 100) / 2.0
 
-    # Blend: 65% academic, 35% public sentiment
+    # Blend: 70% academic (peer-reviewed weighted), 30% public sentiment (low-confidence)
     if public_sentiment_score == 0.0 and total_result_sentences > 0:
         # No public data available — use academic only
         blended = academic_conf
     else:
-        blended = 0.65 * academic_conf + 0.35 * public_norm
+        blended = 0.70 * academic_conf + 0.30 * public_norm
 
     return min(round(blended, 1), 100.0)
 

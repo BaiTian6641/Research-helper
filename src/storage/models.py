@@ -60,6 +60,14 @@ class Paper(Base):
     is_local = Column(Boolean, default=False)
     file_path = Column(String, nullable=True)
 
+    # Source quality flags
+    peer_reviewed = Column(Boolean, nullable=True)     # True for journal articles / peer-reviewed venues
+    confidence_tier = Column(String, nullable=True)     # "high" | "medium" | "low"
+
+    # Relevance filtering (post-processing)
+    relevance_score = Column(Float, nullable=True)    # 0.0-1.0 relevance to query
+    relevance_label = Column(String, nullable=True)    # "high" | "medium" | "low"
+
     # LLM-derived (populated after analytics)
     themes = Column(Text, nullable=True)  # JSON list
     motivation_sentences = Column(Text, nullable=True)  # JSON list
@@ -132,6 +140,10 @@ class Paper(Base):
             "url": self.url,
             "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
             "is_local": self.is_local,
+            "peer_reviewed": self.peer_reviewed,
+            "confidence_tier": self.confidence_tier,
+            "relevance_score": self.relevance_score,
+            "relevance_label": self.relevance_label,
             "themes": self.get_themes(),
             "motivation_sentences": self.get_motivation_sentences(),
             "confidence_label": self.confidence_label,
@@ -245,6 +257,18 @@ class FieldStats:
     field_specific_risks: list[str] | None = None
     recommended_focus_areas: list[str] | None = None
 
+    # Source quality
+    peer_reviewed_ratio: float = 0.0       # fraction of papers from peer-reviewed sources
+    confidence_tier_counts: dict[str, int] = dataclass_field(default_factory=dict)
+
+    # Author background analysis (LLM)
+    author_profiles: list[dict] | None = None  # [{name, affiliation_type, domain, notable_work}]
+
+    # Relevance filtering
+    filtered_paper_ids: list[str] = dataclass_field(default_factory=list)   # IDs of removed papers
+    filtered_paper_count: int = 0
+    relevance_filter_log: list[dict] | None = None  # [{id, title, relevance_score, kept}]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
@@ -294,6 +318,12 @@ class FieldStats:
             "gaps_and_opportunities": self.gaps_and_opportunities,
             "field_specific_risks": self.field_specific_risks,
             "recommended_focus_areas": self.recommended_focus_areas,
+            "peer_reviewed_ratio": self.peer_reviewed_ratio,
+            "confidence_tier_counts": self.confidence_tier_counts,
+            "author_profiles": self.author_profiles,
+            "filtered_paper_ids": self.filtered_paper_ids,
+            "filtered_paper_count": self.filtered_paper_count,
+            "relevance_filter_log": self.relevance_filter_log,
         }
 
     @classmethod
@@ -317,4 +347,18 @@ class FieldStats:
 def init_db(db_path: str) -> sessionmaker[Session]:
     engine = create_engine(f"sqlite:///{db_path}", echo=False)
     Base.metadata.create_all(engine)
+    # Lightweight migration: add columns that may not exist in older DBs
+    from sqlalchemy import inspect as sa_inspect, text
+    insp = sa_inspect(engine)
+    existing_cols = {c["name"] for c in insp.get_columns("papers")}
+    migrations = [
+        ("relevance_score", "FLOAT"),
+        ("relevance_label", "VARCHAR"),
+    ]
+    with engine.begin() as conn:
+        for col_name, col_type in migrations:
+            if col_name not in existing_cols:
+                conn.execute(text(
+                    f"ALTER TABLE papers ADD COLUMN {col_name} {col_type}"
+                ))
     return sessionmaker(bind=engine, expire_on_commit=False)

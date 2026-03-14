@@ -80,4 +80,6 @@ class IEEEFetcher(AbstractFetcher):
             url=raw.get("html_url"),
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=True,
+            confidence_tier="high",
         )

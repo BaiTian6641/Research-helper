@@ -267,6 +267,30 @@ def format_abstracts_batch(abstracts: list[tuple[int, str]], max_chars: int = 60
 
 
 # ---------------------------------------------------------------------------
+# Author background profiling
+# ---------------------------------------------------------------------------
+AUTHOR_PROFILE_PROMPT = """\
+Task: Profile the top authors listed in <data> based on their publication record.
+
+{_guard}
+
+For each author, infer:
+- affiliation_type: "academia", "industry", "government", or "unknown"
+  (Use venue names, co-authors, and paper topics as evidence.)
+- domain: a brief 2-5 word description of their main research domain
+- notable_work: one sentence summarising their most impactful contribution
+
+Required output — a JSON object with exactly this structure:
+{{"profiles": [{{"name": "<str>", "affiliation_type": "academia"|"industry"|"government"|"unknown", "domain": "<str>", "notable_work": "<str>"}}]}}
+
+<data>
+{authors_text}
+</data>
+
+Output JSON only.""".replace("{_guard}", _DATA_GUARD)
+
+
+# ---------------------------------------------------------------------------
 # Field-context-aware deep analysis
 # ---------------------------------------------------------------------------
 FIELD_CONTEXT_ANALYSIS_PROMPT = """\
@@ -301,6 +325,30 @@ Provide a JSON object with exactly this structure:
 
 <data>
 {sample_abstracts}
+</data>
+
+Output JSON only.""".replace("{_guard}", _DATA_GUARD)
+
+
+# ---------------------------------------------------------------------------
+# Relevance filtering (post-processing)
+# ---------------------------------------------------------------------------
+RELEVANCE_FILTER_PROMPT = """\
+Task: Score how relevant each paper below is to the research query "{query}".
+
+{_guard}
+
+For each paper (identified by its [index]), assign a relevance score:
+- 1.0 = directly about the query topic
+- 0.7 = closely related (same sub-field, overlapping methods/concepts)
+- 0.4 = tangentially related (same broad area but different focus)
+- 0.1 = unrelated (different topic, only superficial keyword overlap)
+
+Required output — a JSON object with exactly this structure:
+{{"scores": [{{"index": <int>, "relevance": <float>}}]}}
+
+<data>
+{papers_text}
 </data>
 
 Output JSON only.""".replace("{_guard}", _DATA_GUARD)

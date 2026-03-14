@@ -54,7 +54,7 @@ async def analyze_sentiment_llm(
         prompt = LLM_SENTIMENT_ANALYSIS_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
+            result = await llm_client.complete_json(prompt, max_tokens=8192, token_callback=token_callback)
             for item in result.get("classifications", []):
                 if not isinstance(item, dict):
                     continue

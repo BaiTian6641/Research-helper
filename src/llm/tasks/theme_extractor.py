@@ -41,7 +41,7 @@ async def extract_themes(
         prompt = THEME_EXTRACTION_PROMPT.format(abstracts_text=abstracts_text)
 
         try:
-            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
+            result = await llm_client.complete_json(prompt, max_tokens=8192, token_callback=token_callback)
             themes = result.get("themes", [])
             if isinstance(themes, list):
                 all_themes.extend(str(t) for t in themes)

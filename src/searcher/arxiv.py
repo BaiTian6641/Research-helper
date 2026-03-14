@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -63,51 +64,65 @@ class ArxivFetcher(AbstractFetcher):
     ) -> list[dict]:
         search_query = self._build_query(query)
         headers = {"User-Agent": "ResearchFieldIntelTool/1.0 (contact: admin@localhost)"}
+        results: list[dict] = []
+        batch_size = min(max_results, 500)  # arXiv allows up to ~2000 per call
+        start = 0
 
-        params = {
-            "search_query": search_query,
-            "start": 0,
-            "max_results": min(max_results, 2000),
-            "sortBy": "relevance",
-            "sortOrder": "descending",
-        }
         async with httpx.AsyncClient(
             timeout=self._timeout, follow_redirects=True, headers=headers
         ) as client:
-            resp = await self._request_with_retry(client, "GET", self.BASE_URL, params=params)
-            resp.raise_for_status()
-            feed = feedparser.parse(resp.text)
+            while len(results) < max_results:
+                params = {
+                    "search_query": search_query,
+                    "start": start,
+                    "max_results": batch_size,
+                    "sortBy": "relevance",
+                    "sortOrder": "descending",
+                }
+                resp = await self._request_with_retry(client, "GET", self.BASE_URL, params=params)
+                resp.raise_for_status()
+                feed = feedparser.parse(resp.text)
 
-            # Zero-result fallback: try a plain `all:` search without field qualifiers
-            if not feed.entries and search_query != f"all:{query}":
-                fallback_params = {**params, "search_query": f"all:{query}"}
-                resp2 = await self._request_with_retry(client, "GET", self.BASE_URL, params=fallback_params)
-                resp2.raise_for_status()
-                feed = feedparser.parse(resp2.text)
+                # Zero-result fallback on first page
+                if start == 0 and not feed.entries and search_query != f"all:{query}":
+                    fallback_params = {**params, "search_query": f"all:{query}"}
+                    resp2 = await self._request_with_retry(client, "GET", self.BASE_URL, params=fallback_params)
+                    resp2.raise_for_status()
+                    feed = feedparser.parse(resp2.text)
+                    search_query = f"all:{query}"  # use fallback for subsequent pages
 
-        results: list[dict] = []
-        for entry in feed.entries:
-            year = None
-            if hasattr(entry, "published"):
-                try:
-                    year = int(entry.published[:4])
-                except (ValueError, TypeError):
-                    pass
-            if year_start and year and year < year_start:
-                continue
-            if year_end and year and year > year_end:
-                continue
-            results.append({
-                "title": entry.get("title", "").replace("\n", " ").strip(),
-                "authors": [a.get("name", "") for a in entry.get("authors", [])],
-                "year": year,
-                "abstract": entry.get("summary", "").replace("\n", " ").strip(),
-                "url": entry.get("link", ""),
-                "arxiv_id": entry.get("id", "").split("/abs/")[-1] if "/abs/" in entry.get("id", "") else entry.get("id", ""),
-                "categories": [t.get("term", "") for t in entry.get("tags", [])],
-                "published": entry.get("published", ""),
-            })
-        return results
+                if not feed.entries:
+                    break
+
+                for entry in feed.entries:
+                    year = None
+                    if hasattr(entry, "published"):
+                        try:
+                            year = int(entry.published[:4])
+                        except (ValueError, TypeError):
+                            pass
+                    if year_start and year and year < year_start:
+                        continue
+                    if year_end and year and year > year_end:
+                        continue
+                    results.append({
+                        "title": entry.get("title", "").replace("\n", " ").strip(),
+                        "authors": [a.get("name", "") for a in entry.get("authors", [])],
+                        "year": year,
+                        "abstract": entry.get("summary", "").replace("\n", " ").strip(),
+                        "url": entry.get("link", ""),
+                        "arxiv_id": entry.get("id", "").split("/abs/")[-1] if "/abs/" in entry.get("id", "") else entry.get("id", ""),
+                        "categories": [t.get("term", "") for t in entry.get("tags", [])],
+                        "published": entry.get("published", ""),
+                    })
+
+                start += len(feed.entries)
+                if len(feed.entries) < batch_size:
+                    break  # no more pages
+                # arXiv is rate-limited to ~1 req/3s without API key
+                await asyncio.sleep(3.0)
+
+        return results[:max_results]
 
     def normalise(self, raw: dict) -> Paper:
         paper_id = Paper.make_id(title=raw.get("title", ""), year=raw.get("year"))
@@ -130,4 +145,6 @@ class ArxivFetcher(AbstractFetcher):
             url=raw.get("url"),
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=False,
+            confidence_tier="medium",
         )

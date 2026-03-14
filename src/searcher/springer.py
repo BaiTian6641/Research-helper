@@ -1,7 +1,8 @@
-"""Springer Nature API fetcher (requires API key)."""
+"""Springer Nature API fetcher with pagination (requires API key)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -32,25 +33,49 @@ class SpringerFetcher(AbstractFetcher):
 
         q = f'keyword:"{query}"'
         if year_start and year_end:
-            q += f" onlinedatefrom:{year_start}-01-01 onlinedateto:{year_end}-12-31"
+            q += f" AND onlinedatefrom:{year_start}-01-01 AND onlinedateto:{year_end}-12-31"
         elif year_start:
-            q += f" onlinedatefrom:{year_start}-01-01"
+            q += f" AND onlinedatefrom:{year_start}-01-01"
         elif year_end:
-            q += f" onlinedateto:{year_end}-12-31"
+            q += f" AND onlinedateto:{year_end}-12-31"
 
-        params = {
-            "q": q,
-            "s": 1,
-            "p": min(max_results, 100),
-            "api_key": self._api_key,
-        }
+        results: list[dict] = []
+        batch_size = 100  # Springer API max per page
+        start = 1
+
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await self._request_with_retry(client, "GET", self.BASE_URL, params=params)
-            if resp.status_code == 429:
-                return []
-            resp.raise_for_status()
-            data = resp.json()
-        return data.get("records", [])
+            while len(results) < max_results:
+                params = {
+                    "q": q,
+                    "s": start,
+                    "p": min(batch_size, max_results - len(results)),
+                    "api_key": self._api_key,
+                }
+                resp = await self._request_with_retry(
+                    client, "GET", self.BASE_URL, params=params,
+                )
+                if resp.status_code == 429:
+                    break
+                resp.raise_for_status()
+                data = resp.json()
+                records = data.get("records", [])
+                if not records:
+                    break
+                results.extend(records)
+                start += len(records)
+                # Check total
+                total = int(
+                    data.get("result", [{}])[0].get("total", 0)
+                    if data.get("result")
+                    else 0
+                )
+                if total and start > total:
+                    break
+                if len(records) < batch_size:
+                    break
+                await asyncio.sleep(1.0)
+
+        return results[:max_results]
 
     def normalise(self, raw: dict) -> Paper:
         doi = raw.get("doi")
@@ -86,4 +111,6 @@ class SpringerFetcher(AbstractFetcher):
             url=raw.get("url", [{}])[0].get("value") if isinstance(raw.get("url"), list) else None,
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=True,
+            confidence_tier="high",
         )

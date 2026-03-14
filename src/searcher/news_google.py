@@ -87,4 +87,6 @@ class GoogleNewsFetcher(AbstractFetcher):
             abstract=raw.get("summary", ""),
             sources=json.dumps(["google_news"]),
             url=raw.get("url", ""),
+            peer_reviewed=False,
+            confidence_tier="low",
         )

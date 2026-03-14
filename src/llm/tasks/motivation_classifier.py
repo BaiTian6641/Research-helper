@@ -52,7 +52,7 @@ async def classify_motivation(
             total_sentences += len([s for s in abstract.split(".") if len(s.strip()) > 10])
 
         try:
-            result = await llm_client.complete_json(prompt, max_tokens=4096, token_callback=token_callback)
+            result = await llm_client.complete_json(prompt, max_tokens=8192, token_callback=token_callback)
             sentences = result.get("sentences", [])
             if isinstance(sentences, list):
                 for s in sentences:

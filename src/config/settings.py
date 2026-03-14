@@ -24,15 +24,19 @@ _yaml = _load_yaml()
 
 
 class SearchSettings(BaseSettings):
-    max_results_per_source: int = 200
+    max_results_per_source: int = 500
     min_citations: int = 0
     year_start: int = 2015
     year_end: int = 2026
     default_sources: list[str] = [
-        "arxiv", "semantic_scholar", "openalex", "pubmed", "crossref",
+        "arxiv", "semantic_scholar", "openalex", "pubmed", "crossref", "nature",
     ]
-    timeout_seconds: int = 30
+    timeout_seconds: int = 45
     retry_max: int = 3
+    # High-priority keywords receive boosted weighting during search and
+    # scoring.  Papers whose title or abstract matches any of these terms
+    # are considered higher-relevance.
+    priority_keywords: list[str] = []
 
 
 class DedupSettings(BaseSettings):

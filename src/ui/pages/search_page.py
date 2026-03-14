@@ -35,6 +35,7 @@ ALL_SOURCES = [
     "crossref",
     "ieee",
     "springer",
+    "nature",
 ]
 
 ALL_WEB_SOURCES = [

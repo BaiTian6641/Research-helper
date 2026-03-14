@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -60,6 +61,10 @@ class CrossrefFetcher(AbstractFetcher):
                     break
                 results.extend(items)
                 offset += len(items)
+                if len(items) < rows:
+                    break  # last page
+                # Crossref polite API — 50 req/s with mailto, be gentle
+                await asyncio.sleep(0.5)
 
         return results[:max_results]
 
@@ -122,5 +127,7 @@ class CrossrefFetcher(AbstractFetcher):
             url=raw.get("URL"),
             fetched_at=datetime.utcnow(),
             is_local=False,
+            peer_reviewed=raw.get("type") == "journal-article",
+            confidence_tier="high" if raw.get("type") == "journal-article" else "medium",
             funder_names=json.dumps(funders) if funders else None,
         )

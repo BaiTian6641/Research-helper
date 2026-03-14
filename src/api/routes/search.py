@@ -52,6 +52,7 @@ async def _run_search_impl(
         max_results_per_source=req.max_results_per_source,
         timeout=settings.search.timeout_seconds,
         title_similarity_threshold=settings.dedup.title_similarity_threshold,
+        priority_keywords=settings.search.priority_keywords,
     )
     papers = await orchestrator.search(
         query=req.query,
@@ -118,6 +119,8 @@ async def _run_search_impl(
             doi=p.doi,
             url=p.url,
             sources=p.get_sources(),
+            relevance_score=getattr(p, "relevance_score", None),
+            relevance_label=getattr(p, "relevance_label", None),
         )
         for p in all_items
     ]
